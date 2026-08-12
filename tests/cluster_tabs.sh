@@ -105,7 +105,8 @@ wait_for_view() {
     attempt=0
     while :; do
         screen=$(tmux capture-pane -p -t "$session" 2>/dev/null || true)
-        if printf '%s\n' "$screen" | grep -F "cluster $cluster" >/dev/null \
+        if { printf '%s\n' "$screen" | grep -F "Cluster [ $cluster ]" >/dev/null \
+                || printf '%s\n' "$screen" | grep -F "slurm-log  [ $cluster ]" >/dev/null; } \
             && printf '%s\n' "$screen" | grep -F "$present" >/dev/null \
             && printf '%s\n' "$screen" | grep -F "$selected selected" >/dev/null \
             && { test -z "$absent" || ! printf '%s\n' "$screen" | grep -F "$absent" >/dev/null; }
@@ -147,8 +148,8 @@ start_picker "$main_session" 120 20 "$binary" all --cluster all --refresh 3600
 wait_for_view "$main_session" ALL alpha-only-job '' 0
 screen=$(tmux capture-pane -p -t "$main_session")
 printf '%s\n' "$screen" | grep -F beta-only-job >/dev/null
-printf '%s\n' "$screen" | grep -F 'MARK Space' >/dev/null
-printf '%s\n' "$screen" | grep -F 'A auto-add' >/dev/null
+printf '%s\n' "$screen" | grep -F 'Space Select' >/dev/null
+printf '%s\n' "$screen" | grep -F 'Auto-add [ OFF ]' >/dev/null
 
 # Stop waits for an explicit decision (unrelated keys do not cancel it), sends
 # scancel, and reports success instead of silently returning to the list.

@@ -20,30 +20,40 @@ fn draw(
     // escapes here: tmux popups can repaint their border for those sequences.
     let mut out = Vec::new();
     let (width, height) = terminal::size()?;
-    let (header, mut primary, mut secondary) =
-        header_lines(manage, history, auto_add, blocked, log_warnings, cluster);
-    if width < 110 {
-        (primary, secondary) = compact_commands(manage);
+    let header = picker_header_lines(
+        width,
+        manage,
+        history,
+        auto_add,
+        blocked,
+        log_warnings,
+        cluster,
+        blocked_count,
+    );
+    let header_rows = header.len().min(height.saturating_sub(2) as usize);
+    execute!(out, cursor::MoveTo(0, 0))?;
+    for (index, line) in header.iter().take(header_rows).enumerate() {
+        execute!(
+            out,
+            SetAttribute(if index == 0 {
+                Attribute::Bold
+            } else {
+                Attribute::Reset
+            }),
+            Print(clip_line(line, width)),
+            terminal::Clear(ClearType::UntilNewLine),
+            Print("\r\n")
+        )?;
     }
     execute!(
         out,
-        cursor::MoveTo(0, 0),
         SetAttribute(Attribute::Bold),
-        Print(clip_line(&header, width)),
-        terminal::Clear(ClearType::UntilNewLine),
-        Print("\r\n"),
-        Print(clip_line(&primary, width)),
-        terminal::Clear(ClearType::UntilNewLine),
-        Print("\r\n"),
-        Print(clip_line(&secondary, width)),
-        terminal::Clear(ClearType::UntilNewLine),
-        Print("\r\n"),
-        SetAttribute(Attribute::Reset),
         Print("    CLUSTER  JOB ID / RUNS   STATE               ELAPSED     NAME"),
         terminal::Clear(ClearType::UntilNewLine),
-        Print("\r\n")
+        Print("\r\n"),
+        SetAttribute(Attribute::Reset)
     )?;
-    let available = height.saturating_sub(5) as usize;
+    let available = height.saturating_sub(header_rows as u16 + 2) as usize;
     let top = focus.saturating_sub(available.saturating_sub(1));
     for (row_index, row) in rows.iter().enumerate().skip(top).take(available) {
         let focused = row_index == focus;

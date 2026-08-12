@@ -100,17 +100,35 @@ fn draw_popup(
     previous: &mut Vec<String>,
 ) -> Result<()> {
     let (width, height) = terminal::size()?;
-    let available = height.saturating_sub(4) as usize;
+    if height == 0 {
+        return Ok(());
+    }
+    let header = picker_header_lines(
+        width,
+        manage,
+        history,
+        auto_add,
+        blocked,
+        log_warnings,
+        cluster,
+        blocked_count,
+    );
+    let header_rows = header.len().min(height.saturating_sub(2) as usize);
+    let table_row = header_rows;
+    let data_row = table_row + 1;
+    let available = height.saturating_sub(data_row as u16 + 1) as usize;
     let top = focus.saturating_sub(available.saturating_sub(1));
-    let (header, _, _) = header_lines(manage, history, auto_add, blocked, log_warnings, cluster);
-    let shortcuts = compact_commands(manage).0;
     // Collapsing a group turns its former child rows into blanks. Those blanks
     // still need to overwrite the full popup width; an empty write leaves the
     // previous terminal cells behind, while EL makes tmux visibly flicker.
     let mut frame = vec![fit_popup_line("", width); height as usize];
-    frame[0] = header;
-    frame[1] = shortcuts;
-    frame[2] = "    CLUSTER  JOB ID / RUNS   STATE               ELAPSED     NAME".into();
+    for (target, line) in frame.iter_mut().zip(header).take(header_rows) {
+        *target = fit_popup_line(&line, width);
+    }
+    frame[table_row] = fit_popup_line(
+        "    CLUSTER  JOB ID / RUNS   STATE               ELAPSED     NAME",
+        width,
+    );
     for (screen_row, (row_index, row)) in rows
         .iter()
         .enumerate()
@@ -118,7 +136,7 @@ fn draw_popup(
         .take(available)
         .enumerate()
     {
-        frame[screen_row + 3] = popup_row(jobs, row, row_index, focus, selected, width);
+        frame[screen_row + data_row] = popup_row(jobs, row, row_index, focus, selected, width);
     }
     let warning = popup_warning(warnings, show_warnings);
     if height > 0 {
@@ -248,34 +266,7 @@ fn group_row_text(row: &Row, selected: bool, focused: bool) -> String {
     )
 }
 
-fn header_lines(
-    manage: bool,
-    history: u8,
-    auto_add: bool,
-    blocked: bool,
-    log_warnings: bool,
-    cluster: &str,
-) -> (String, String, String) {
-    let mode = ["LIVE ≤2m", "OLD ≤20m", "ARCHIVE"][history as usize];
-    (
-        format!(
-            "slurm-log  ·  {mode}  ·  cluster {}  ·  auto {}  ·  blocked {}  ·  log warnings {}",
-            if matches!(cluster, "all" | "both") {
-                "ALL"
-            } else {
-                cluster
-            },
-            if auto_add { "on" } else { "off" },
-            if blocked { "shown" } else { "hidden" },
-            if log_warnings { "shown" } else { "hidden" }
-        ),
-        format!(
-            "MOVE ↑↓/j/k  ·  MARK Space  ·  {} Enter  ·  CLUSTER Tab/Shift-Tab  ·  SEARCH /  ·  HELP ?",
-            if manage { "APPLY" } else { "OPEN" }
-        ),
-        "VIEWS o recent · a archive · b blocked  ·  ACTIONS A auto-add · s scripts · x stop · d dismiss · q quit".into(),
-    )
-}
+include!("header.rs");
 
 fn confirm_cancel(jobs: &[Job]) -> Result<bool> {
     let (_, height) = terminal::size()?;

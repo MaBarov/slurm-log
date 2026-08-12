@@ -8,7 +8,7 @@ alerts, a live CPU/memory/GPU details dashboard, failure/resource summaries,
 and a private per-user acceleration daemon.
 
 Each installation is isolated by Unix user. Configuration, job history,
-daemon sockets, and caches are never shared between colleagues.
+daemon sockets, and caches are never shared between users.
 
 ## Quick setup
 
@@ -39,8 +39,8 @@ cd slurm-log
 ./install.sh
 ```
 
-The installer does not assume Sprint, CISPA, or any other cluster. Its setup
-wizard lets each user add only the local and SSH clusters they actually use;
+The installer does not assume a particular site or cluster. Its setup wizard
+lets each user add only the local and SSH clusters they actually use;
 an SSH host can be a hostname or an alias from `~/.ssh/config`. The installer:
 
 1. checks runtime dependencies;
@@ -106,7 +106,7 @@ Configuration is stored at `~/.config/slurm-log/config.json` by default:
   ],
   "sbatchBanks": [
     {"path":"/home/user/project/cluster"},
-    {"path":"/home/user/shared-jobs","name":"Team Jobs"}
+    {"path":"/home/user/shared-jobs","name":"Shared Jobs"}
   ],
   "statePath": "/home/user/.local/state/slurm-log/state.json"
 }
@@ -130,10 +130,10 @@ inherit cluster-specific assumptions.
 Setup defaults the small state ledger and daemon socket to responsive storage
 under `~/.local/state/slurm-log`; avoid placing them on a cluster/network mount.
 
-Set `"accounting": false` for clusters such as Sprint where Slurm accounting
-storage is disabled. slurm-log then avoids `sacct` entirely and uses
-`squeue`/`scontrol`/`sstat` for active jobs. Completed-job history is not
-available from Slurm on such clusters.
+Set `"accounting": false` when a cluster does not provide Slurm accounting.
+slurm-log then avoids `sacct` entirely and uses `squeue`, `scontrol`, and
+`sstat` for active jobs. Completed-job history is not available from Slurm on
+such clusters.
 
 Press `s` in the job picker (or run `slurm-log bank`) to browse `.sbatch`
 files recursively. During setup, enter one or more broad workspace roots and
@@ -208,8 +208,7 @@ If the daemon is unavailable, clients transparently use the direct query path.
 
 ## Updating and uninstalling
 
-When a newer release has been placed in the shared folder or extracted from a
-new archive, run its updater:
+After downloading or extracting a newer release, run its updater:
 
 ```bash
 ./update.sh
@@ -227,7 +226,7 @@ use `./update.sh --prefix DIR`; `--binary FILE` selects an explicit release.
 This removes the binary and stops the daemon while preserving configuration
 and history. `./uninstall.sh --purge` removes those as well.
 
-## Sharing a fresh archive
+## Building a release archive
 
 From the source directory:
 

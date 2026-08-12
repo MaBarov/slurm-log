@@ -160,7 +160,7 @@ wait_focus() {
 }
 
 start_picker "$main_session"
-wait_text "$main_session" 'cluster ALL'
+wait_text "$main_session" 'Cluster [ ALL ]'
 wait_text "$main_session" 'blocked: 1 (b to show)'
 
 # Every navigation alias and boundary key moves to the intended row.
@@ -270,7 +270,7 @@ done
 tmux_test send-keys -t "$main_session" s
 wait_text "$main_session" 'SBATCH BANK'
 tmux_test send-keys -t "$main_session" s
-wait_text "$main_session" 'cluster ALL'
+wait_text "$main_session" 'Cluster [ ALL ]'
 
 # Search cancellation and applied-search clearing are distinct Esc paths.
 tmux_test send-keys -t "$main_session" / ignored Escape
@@ -289,7 +289,7 @@ wait_text "$main_session" 'Right-click'
 tmux_test send-keys -t "$main_session" PPage Home g
 wait_text "$main_session" NAVIGATION
 tmux_test send-keys -t "$main_session" '?'
-wait_text "$main_session" 'cluster ALL'
+wait_text "$main_session" 'Cluster [ ALL ]'
 
 # Main-picker q exits without opening a workspace.
 tmux_test send-keys -t "$main_session" q
@@ -300,7 +300,7 @@ done
 
 # Enter opens exactly the selected collapsed group's two jobs in a workspace.
 start_picker "$open_session"
-wait_text "$open_session" 'cluster ALL'
+wait_text "$open_session" 'Cluster [ ALL ]'
 tmux_test send-keys -t "$open_session" / grouped Enter Space Enter
 attempt=0
 workspace=
