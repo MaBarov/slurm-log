@@ -44,8 +44,8 @@ pub fn toggle_details(config: &Config, focused: &str) -> Result<()> {
     let mut args = vec![
         "split-window".into(),
         "-v".into(),
-        "-p".into(),
-        "38".into(),
+        "-l".into(),
+        "38%".into(),
         "-P".into(),
         "-F".into(),
         "#{pane_id}".into(),
@@ -55,7 +55,16 @@ pub fn toggle_details(config: &Config, focused: &str) -> Result<()> {
     args.extend(detail_watcher(config, &cluster, &job_id));
     let out = tmux(args)?;
     if !out.status.success() {
-        bail!("could not open the details pane");
+        let reason = String::from_utf8_lossy(&out.stderr);
+        let reason = reason.trim();
+        bail!(
+            "could not open the details pane{}",
+            if reason.is_empty() {
+                String::new()
+            } else {
+                format!(": {reason}")
+            }
+        );
     }
     let pane = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let mut metadata = vec![
