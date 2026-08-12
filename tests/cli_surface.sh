@@ -5,6 +5,8 @@
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
+package_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml" | sed -n '1p')
+test -n "$package_version"
 test_root=$(mktemp -d)
 case "$test_root" in /tmp/*) ;; *) exit 1 ;; esac
 fake_bin=$test_root/bin
@@ -16,6 +18,10 @@ mkdir -p "$fake_bin" "$home_dir" "$test_root/state" "$test_root/bank/extra"
 mkdir -p "$test_root/bank-duplicate"
 
 cleanup() {
+    if test "${SLURM_LOG_TEST_KEEP_TMP:-0}" = 1; then
+        printf 'Preserved CLI fixture: %s\n' "$test_root" >&2
+        return
+    fi
     env PATH="$fake_bin:/usr/local/bin:/usr/bin:/bin" HOME="$home_dir" \
         SLURM_LOG_CONFIG="$config" "$binary" daemon stop >/dev/null 2>&1 || true
     rm -rf "$test_root"
@@ -149,8 +155,8 @@ expect_fail() {
 "$binary" -h >"$test_root/help-short"
 cmp "$test_root/help-long" "$test_root/help-short"
 grep -F 'slurm-log — fast, owner-scoped' "$test_root/help-long" >/dev/null
-test "$("$binary" --version)" = 'slurm-log 0.1.6'
-test "$("$binary" -V)" = 'slurm-log 0.1.6'
+test "$("$binary" --version)" = "slurm-log $package_version"
+test "$("$binary" -V)" = "slurm-log $package_version"
 expect_fail --does-not-exist
 expect_fail --cluster
 expect_fail --lines nope
