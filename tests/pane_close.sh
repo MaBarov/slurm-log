@@ -7,8 +7,21 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 binary=$project_dir/target/release/slurm-log
 test_root=$(mktemp -d)
 session=slurm-log-close-test-$$
+socket=slurm-log-close-test-$$
+tmux_test() {
+    tmux -L "$socket" "$@"
+}
+fail_stage() {
+    stage=$1
+    shift
+    printf '%s\n' "$*" >&2
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        printf '::error title=pane_close failed::%s\n' "$stage"
+    fi
+    exit 1
+}
 cleanup() {
-    tmux kill-session -t "$session" >/dev/null 2>&1 || true
+    tmux_test kill-server >/dev/null 2>&1 || true
     rm -rf "$test_root"
 }
 trap cleanup EXIT HUP INT TERM
@@ -34,13 +47,13 @@ cat >"$config" <<EOF
 {"clusters":[{"name":"cispa","transport":"ssh","user":"offline","sshHost":"offline.invalid","workingDirectory":"$test_root","accounting":true}],"statePath":"$test_root/state/state.json"}
 EOF
 
-tmux new-session -d -s "$session"
-tmux set-option -w -t "$session" remain-on-exit on
-log_pane=$(tmux display-message -p -t "$session" '#{pane_id}')
-details_pane=$(tmux split-window -d -P -F '#{pane_id}' -t "$log_pane" \
+tmux_test new-session -d -s "$session"
+tmux_test set-option -w -t "$session" remain-on-exit on
+log_pane=$(tmux_test display-message -p -t "$session" '#{pane_id}')
+details_pane=$(tmux_test split-window -d -P -F '#{pane_id}' -t "$log_pane" \
     'while :; do sleep 60; done')
-tmux set-option -p -t "$details_pane" @slurm_log_detail_parent "$log_pane"
-tmux respawn-pane -k -t "$log_pane" \
+tmux_test set-option -p -t "$details_pane" @slurm_log_detail_parent "$log_pane"
+tmux_test respawn-pane -k -t "$log_pane" \
     env PATH="$fake_bin:/usr/local/bin:/usr/bin:/bin" \
     HOME="$test_root" \
     SLURM_LOG_LOCAL_USER=offline \
@@ -52,27 +65,25 @@ tmux respawn-pane -k -t "$log_pane" \
 
 attempt=0
 while :; do
-    captured=$(tmux capture-pane -p -S -100 -t "$log_pane" 2>/dev/null || true)
+    captured=$(tmux_test capture-pane -p -S -100 -t "$log_pane" 2>/dev/null || true)
     case "$captured" in *'Press Enter to close this pane.'*) break ;; esac
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 1000 ]; then
-        printf 'Pane never reached close prompt:\n%s\n' "$captured" >&2
-        tmux list-panes -t "$session" \
+        tmux_test list-panes -t "$session" \
             -F 'dead=#{pane_dead} status=#{pane_dead_status} command=#{pane_current_command}' >&2 || true
-        exit 1
+        fail_stage prompt "Pane never reached close prompt"
     fi
     sleep 0.01
 done
 
-tmux send-keys -t "$log_pane" Enter
+tmux_test send-keys -t "$log_pane" Enter
 attempt=0
-while tmux has-session -t "$session" 2>/dev/null; do
+while tmux_test has-session -t "$session" 2>/dev/null; do
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 500 ]; then
-        printf 'Enter did not close completed pane and its details pane\n' >&2
-        tmux list-panes -t "$session" \
+        tmux_test list-panes -t "$session" \
             -F 'pane=#{pane_id} parent=#{@slurm_log_detail_parent} dead=#{pane_dead} status=#{pane_dead_status} command=#{pane_current_command}' >&2 || true
-        exit 1
+        fail_stage teardown "Enter did not close completed pane and its details pane"
     fi
     sleep 0.01
 done
