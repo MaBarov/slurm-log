@@ -124,12 +124,30 @@ tmux_test list-keys -T prefix A | grep -F 'toggle-auto' >/dev/null
 q_binding=$(tmux_test list-keys -T prefix q)
 printf '%s\n' "$q_binding" | grep -F 'single-pane' >/dev/null
 printf '%s\n' "$q_binding" | grep -F 'confirm-before' >/dev/null
-tmux_test list-keys -T prefix x | grep -F 'kill-pane' >/dev/null
+x_binding=$(tmux_test list-keys -T prefix x)
+printf '%s\n' "$x_binding" | grep -F 'close-pane' >/dev/null
+! printf '%s\n' "$x_binding" | grep -F 'confirm-before' >/dev/null
 tmux_test list-keys -T prefix z | grep -F 'resize-pane -Z' >/dev/null
 if tmux_test list-keys -T prefix Q >/dev/null 2>&1; then
     printf 'legacy Ctrl-b Q binding still exists\n' >&2
     exit 1
 fi
+
+# Ctrl-b x protects the final log pane with visible feedback, closes an extra
+# log immediately, and also closes an auxiliary details pane without a prompt.
+first_pane=${pane%%|*}
+"$binary" close-pane "$session" "$first_pane"
+tmux_test has-session -t "$session"
+tmux_test display-message -p -t "$session" '#{pane_id}' | grep -Fx "$first_pane" >/dev/null
+extra_pane=$(tmux_test split-window -d -P -F '#{pane_id}' -t "$session" sleep 120)
+tmux_test set-option -p -t "$extra_pane" @slurm_log_cluster alpha
+tmux_test set-option -p -t "$extra_pane" @slurm_log_job_id 999
+"$binary" close-pane "$session" "$extra_pane"
+! tmux_test list-panes -t "$session" -F '#{pane_id}' | grep -Fx "$extra_pane" >/dev/null
+detail_pane=$(tmux_test split-window -d -P -F '#{pane_id}' -t "$session" sleep 120)
+tmux_test set-option -p -t "$detail_pane" @slurm_log_detail_parent "$first_pane"
+"$binary" close-pane "$session" "$detail_pane"
+! tmux_test list-panes -t "$session" -F '#{pane_id}' | grep -Fx "$detail_pane" >/dev/null
 
 # Mouse behavior: drag preserves selection, right-click copies from anywhere
 # with a 1.5 s toast, and left-click cancels selection.

@@ -9,6 +9,7 @@ fn cli_help_is_scannable_and_documents_public_workflows() {
         "VIEWS",
         "JOB & SCRIPT COMMANDS",
         "WORKSPACE & CACHE",
+        "INSTALLATION",
         "OPTIONS",
         "PICKER ESSENTIALS",
         "EXAMPLES",
@@ -25,6 +26,8 @@ fn cli_help_is_scannable_and_documents_public_workflows() {
         "submit SCRIPT --cluster C",
         "cancel JOB_ID... --cluster C",
         "daemon start|status|stop",
+        "update --binary FILE",
+        "uninstall --purge",
         "--cluster NAME|all",
         "--show-log-warnings",
         "-h, --help",
@@ -51,6 +54,7 @@ fn cli_help_hides_internal_worker_commands() {
         "pane-follow",
         "initial-state",
         "suppress",
+        "close-pane",
     ] {
         assert!(
             !help.contains(internal),

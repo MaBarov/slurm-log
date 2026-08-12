@@ -23,6 +23,8 @@ cli.command.sessions	workspace_controls.sh
 cli.command.attach	cli_surface.sh
 cli.command.close	workspace_controls.sh
 cli.command.daemon	daemon_integration.sh
+cli.command.update	package_smoke.sh
+cli.command.uninstall	package_smoke.sh
 cli.direct.implicit_cluster	cli_surface.sh
 cli.direct.explicit_cluster	cli_surface.sh
 cli.direct.follow_terminal	cli_surface.sh
@@ -37,6 +39,8 @@ cli.option.local_user	cli_surface.sh
 cli.option.remote_user	cli_surface.sh
 cli.option.ssh_host	cli_surface.sh
 cli.option.state_path	cli_surface.sh
+cli.option.binary	package_smoke.sh
+cli.option.purge	package_smoke.sh
 cli.option.legacy_me	cli_surface.sh
 internal.pane_follow	pane_close.sh
 internal.suppress	cli_surface.sh
@@ -45,6 +49,7 @@ internal.toggle_auto	workspace_controls.sh
 internal.auto_monitor	workspace_controls.sh
 internal.pick_add	picker_controls.sh
 internal.single_pane	smart_close.sh
+internal.close_pane	workspace_controls.sh
 picker.navigation.arrows_jk	picker_controls.sh
 picker.navigation.page_home_end_g	picker_controls.sh
 picker.group.expand_collapse	picker_controls.sh
@@ -110,9 +115,11 @@ setup.bank_discovery	setup_wizard.sh
 setup.manual_bank_picker	setup_wizard.sh
 package.install	package_smoke.sh
 package.update_atomic	package_smoke.sh
+package.self_update_download	package_smoke.sh
 package.daemon_handoff	package_smoke.sh
 package.reinstall_preserves_config	package_smoke.sh
 package.uninstall_preserves_config	package_smoke.sh
+package.uninstall_purge	package_smoke.sh
 security.hostile_scheduler_data	offline_hostile.sh
 security.argument_quoting	offline_hostile.sh
 security.private_files	package_smoke.sh

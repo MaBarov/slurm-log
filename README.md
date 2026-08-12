@@ -208,23 +208,31 @@ If the daemon is unavailable, clients transparently use the direct query path.
 
 ## Updating and uninstalling
 
-After downloading or extracting a newer release, run its updater:
+Update directly to the latest verified GitHub release:
 
 ```bash
-./update.sh
+slurm-log update
 ```
 
-It checks the new binary before making changes, atomically replaces the current
-installation, and preserves configuration and history. If the private daemon
-was running, it is restarted with the new binary. For a non-default install,
-use `./update.sh --prefix DIR`; `--binary FILE` selects an explicit release.
+It verifies the published SHA-256 checksum, checks the new binary before making
+changes, atomically replaces the current executable, and preserves
+configuration and history. If the private daemon was running, it is restarted
+with the new binary. An already-downloaded or locally built binary can be
+installed without network access:
 
 ```bash
-./uninstall.sh
+slurm-log update --binary ./slurm-log
 ```
 
-This removes the binary and stops the daemon while preserving configuration
-and history. `./uninstall.sh --purge` removes those as well.
+Uninstall while preserving configuration and history:
+
+```bash
+slurm-log uninstall
+```
+
+Use `slurm-log uninstall --purge` only when the per-user configuration and job
+history should also be removed. The standalone `update.sh` and `uninstall.sh`
+remain available in release archives for recovery and scripted deployments.
 
 ## Building a release archive
 

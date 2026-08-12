@@ -149,12 +149,17 @@ expect_fail() {
 "$binary" -h >"$test_root/help-short"
 cmp "$test_root/help-long" "$test_root/help-short"
 grep -F 'slurm-log — fast, owner-scoped' "$test_root/help-long" >/dev/null
-test "$("$binary" --version)" = 'slurm-log 0.1.1'
-test "$("$binary" -V)" = 'slurm-log 0.1.1'
+test "$("$binary" --version)" = 'slurm-log 0.1.2'
+test "$("$binary" -V)" = 'slurm-log 0.1.2'
 expect_fail --does-not-exist
 expect_fail --cluster
 expect_fail --lines nope
 expect_fail --refresh 0
+expect_fail --binary
+expect_fail all --binary "$binary"
+expect_fail all --purge
+expect_fail update unexpected
+expect_fail uninstall unexpected
 expect_fail all --cluster ../escape
 expect_fail nonexistent-mode
 expect_fail details invalid --cluster alpha

@@ -28,7 +28,7 @@ done
 
 help=$($binary --help)
 views='all running failed blocked archive last watch fzf'
-commands='setup details bank submit cancel read unread json sessions attach close daemon'
+commands='setup details bank submit cancel read unread json sessions attach close daemon update uninstall'
 for view in $views; do
     require_feature "cli.view.$view"
     printf '%s\n' "$help" | grep -E "^  $view([[:space:]]|$)" >/dev/null || fail "view absent from help: $view"
@@ -39,11 +39,12 @@ for command in $commands; do
         fail "command absent from help: $command"
 done
 
-for option in lines cluster refresh bank_dir follow fzf show_log_warnings local_user remote_user ssh_host state_path; do
+for option in lines cluster refresh bank_dir follow fzf show_log_warnings local_user remote_user ssh_host state_path binary purge; do
     require_feature "cli.option.$option"
 done
 for spelling in '--lines' '--cluster' '--refresh' '--bank-dir' '--follow' '--fzf' \
-    '--show-log-warnings' '--local-user' '--remote-user' '--ssh-host' '--state-path'; do
+    '--show-log-warnings' '--local-user' '--remote-user' '--ssh-host' '--state-path' \
+    '--binary' '--purge'; do
     printf '%s\n' "$help" | grep -F -- "$spelling" >/dev/null || fail "option absent from help: $spelling"
 done
 

@@ -210,6 +210,21 @@ fn setup(config: &Config, session: &str) -> Result<()> {
             .join(" "),
     );
     tmux(["bind-key", "i", "run-shell", &details])?;
+    let close_pane = format!(
+        "{} {} close-pane {} '#{{pane_id}}'",
+        shell_words::quote(&config.executable.display().to_string()),
+        config
+            .child_args()
+            .into_iter()
+            .map(|value| shell_words::quote(&value).into_owned())
+            .collect::<Vec<_>>()
+            .join(" "),
+        shell_words::quote(session)
+    );
+    // tmux's default `x` asks for confirmation in the status line, which is
+    // easy to miss under the persistent job identity. Use an explicit action:
+    // close details/extra logs immediately and protect the final log pane.
+    tmux(["bind-key", "x", "run-shell", &close_pane])?;
     let toggle = format!(
         "{} {} toggle-auto {}",
         shell_words::quote(&config.executable.display().to_string()),

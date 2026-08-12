@@ -6,6 +6,12 @@ fn run() -> Result<()> {
     if args.mode == "bank-scan-worker" {
         return bank::run_scan_worker(&args.targets);
     }
+    if args.update_binary.is_some() && args.mode != "update" {
+        bail!("--binary is only valid with `slurm-log update`");
+    }
+    if args.purge && args.mode != "uninstall" {
+        bail!("--purge is only valid with `slurm-log uninstall`");
+    }
     slurm::validate_query(&args.cluster, "all")?;
     if args.refresh == 0 {
         bail!("--refresh must be at least one second");
@@ -55,6 +61,18 @@ fn run() -> Result<()> {
         }];
     }
     config.validate()?;
+    if args.mode == "update" {
+        if args.target.is_some() {
+            bail!("update takes no positional arguments");
+        }
+        return lifecycle::update(&config, args.update_binary.as_deref());
+    }
+    if args.mode == "uninstall" {
+        if args.target.is_some() {
+            bail!("uninstall takes no positional arguments");
+        }
+        return lifecycle::uninstall(&config, args.purge);
+    }
     if args.mode == "setup" {
         return setup::run(&config);
     }
@@ -64,6 +82,17 @@ fn run() -> Result<()> {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("session required"))?;
         std::process::exit(if tmux::single_pane(session)? { 0 } else { 1 });
+    }
+    if args.mode == "close-pane" {
+        let session = args
+            .target
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("session required"))?;
+        let pane = args
+            .targets
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("focused pane required"))?;
+        return tmux::close_focused_pane(session, pane);
     }
     if ["sessions", "attach", "close"].contains(&args.mode.as_str()) {
         std::process::exit(tmux::session_command(&args.mode, args.target.as_deref())?);

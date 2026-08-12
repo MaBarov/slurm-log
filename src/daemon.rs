@@ -191,6 +191,32 @@ pub fn command(config: &Config, action: Option<&str>) -> Result<()> {
     }
 }
 
+pub(crate) fn is_running(config: &Config) -> bool {
+    let (socket, _) = paths(config);
+    exchange(&socket, &Request::Ping).is_ok()
+}
+
+pub(crate) fn stop_for_lifecycle(config: &Config) -> Result<bool> {
+    if !is_running(config) {
+        return Ok(false);
+    }
+    let (socket, _) = paths(config);
+    exchange(&socket, &Request::Stop)?;
+    Ok(true)
+}
+
+pub(crate) fn start_for_lifecycle(config: &Config) -> Result<()> {
+    start(config)?;
+    let (socket, _) = paths(config);
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(10));
+        if exchange(&socket, &Request::Ping).is_ok() {
+            return Ok(());
+        }
+    }
+    bail!("daemon did not restart after lifecycle operation")
+}
+
 include!("daemon/server.rs");
 include!("daemon/cache.rs");
 

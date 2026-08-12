@@ -6,6 +6,7 @@ mod config;
 mod daemon;
 mod details;
 mod follow;
+mod lifecycle;
 mod model;
 mod setup;
 mod slurm;
@@ -43,6 +44,8 @@ struct Args {
     ssh_host: Option<String>,
     state_path: Option<String>,
     bank_dir: Option<String>,
+    update_binary: Option<String>,
+    purge: bool,
     targets: Vec<String>,
 }
 
@@ -62,6 +65,8 @@ fn parse_args() -> Result<Args> {
     let mut ssh_host = None;
     let mut state_path = None;
     let mut bank_dir = None;
+    let mut update_binary = None;
+    let mut purge = false;
     while let Some(value) = values.next() {
         match value.as_str() {
             "-h" | "--help" => {
@@ -103,6 +108,14 @@ fn parse_args() -> Result<Args> {
             "--ssh-host" => ssh_host = values.next(),
             "--state-path" => state_path = values.next(),
             "--bank-dir" => bank_dir = values.next(),
+            "--binary" => {
+                update_binary = Some(
+                    values
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--binary needs a value"))?,
+                )
+            }
+            "--purge" => purge = true,
             "--me" => {}
             option if option.starts_with('-') => bail!("unknown option {option}"),
             _ => positional.push(value),
@@ -129,6 +142,8 @@ fn parse_args() -> Result<Args> {
         ssh_host,
         state_path,
         bank_dir,
+        update_binary,
+        purge,
         targets,
     })
 }
@@ -178,6 +193,12 @@ WORKSPACE & CACHE
   close [SESSION]             Close a workspace
   daemon start|status|stop    Manage the per-user snapshot cache
 
+INSTALLATION
+  update                      Download, verify, and install the latest release
+  update --binary FILE        Atomically install a local release binary
+  uninstall                   Remove the binary; preserve configuration and history
+  uninstall --purge           Also remove this user's configuration and history
+
 OPTIONS
   -n, --lines N               Initial log lines per pane (default: 50)
       --cluster NAME|all      Query one cluster or all configured clusters
@@ -190,6 +211,8 @@ OPTIONS
       --remote-user USER      Override the configured remote Slurm user
       --ssh-host HOST         Override the configured SSH host
       --state-path PATH       Override the tracking ledger path
+      --binary FILE           Use a local binary with `update`
+      --purge                 Remove user data with `uninstall`
   -h, --help                  Show this help and exit
   -V, --version               Show the version and exit
 
@@ -202,11 +225,11 @@ PICKER ESSENTIALS
   ?                           Show the complete keyboard reference
 
 EXAMPLES
-  slurm-log running --cluster sprint
-  slurm-log details 3206932 --cluster cispa
-  slurm-log cispa 3206932 --follow --lines 200
-  slurm-log submit experiments/train.sbatch --cluster sprint
-  slurm-log cancel 3206932 3206933 --cluster sprint
+  slurm-log running --cluster local
+  slurm-log details 12345 --cluster research
+  slurm-log research 12345 --follow --lines 200
+  slurm-log submit experiments/train.sbatch --cluster local
+  slurm-log cancel 12345 12346 --cluster local
 
 Configuration: ~/.config/slurm-log/config.json
 Run `slurm-log setup` for guided configuration.

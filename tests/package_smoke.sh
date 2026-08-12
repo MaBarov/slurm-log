@@ -82,8 +82,12 @@ fi
 test ! -e "$home_dir/forged-prefix/bin/slurm-log"
 mv "$test_root/good.sha256" "$release_archive.sha256"
 
+initial_binary=$test_root/old-slurm-log
+cp "$project_dir/target/release/slurm-log" "$initial_binary"
+printf 'offline-old-fixture' >>"$initial_binary"
+chmod 755 "$initial_binary"
 "$project_dir/install.sh" \
-    --binary "$project_dir/target/release/slurm-log" \
+    --binary "$initial_binary" \
     --prefix "$home_dir/prefix" \
     --local-user alice \
     --remote-user alice.remote \
@@ -94,7 +98,7 @@ mv "$test_root/good.sha256" "$release_archive.sha256"
 installed=$home_dir/prefix/bin/slurm-log
 config=$home_dir/config/slurm-log/config.json
 test -x "$installed"
-cmp "$installed" "$project_dir/target/release/slurm-log"
+cmp "$installed" "$initial_binary"
 grep -q '"localUser": "alice"' "$config"
 grep -q '"remoteUser": "alice.remote"' "$config"
 grep -q '"sshHost": "cluster-alias"' "$config"
@@ -125,16 +129,24 @@ test -S "$socket"
 test "$(stat -c %a "$socket")" = 600
 "$installed" daemon stop >/dev/null
 
-# A release update is atomic, preserves private configuration, and carries a
-# running daemon across to the new binary. Appending bytes keeps the test fully
-# offline while producing a distinct, still-valid ELF release image.
+# The self-updater downloads and verifies the release entirely through local
+# fixtures, atomically replaces an older valid image, preserves configuration,
+# and carries a running daemon across to the new binary.
+config_before=$(sha256sum "$config" | cut -d ' ' -f 1)
+"$installed" daemon start >/dev/null
+SLURM_LOG_RELEASE_FIXTURE=$release_fixture \
+SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
+    "$installed" update >/dev/null
+cmp "$installed" "$project_dir/target/release/slurm-log"
+test "$(sha256sum "$config" | cut -d ' ' -f 1)" = "$config_before"
+"$installed" daemon status >/dev/null
+
+# Explicit local binaries use the same atomic path without any download.
 release_binary=$test_root/new-slurm-log
 cp "$project_dir/target/release/slurm-log" "$release_binary"
 printf 'offline-update-fixture' >>"$release_binary"
 chmod 755 "$release_binary"
-config_before=$(sha256sum "$config" | cut -d ' ' -f 1)
-"$installed" daemon start >/dev/null
-"$project_dir/update.sh" --prefix "$home_dir/prefix" --binary "$release_binary" >/dev/null
+"$installed" update --binary "$release_binary" >/dev/null
 cmp "$installed" "$release_binary"
 test "$(sha256sum "$config" | cut -d ' ' -f 1)" = "$config_before"
 "$installed" daemon status >/dev/null
@@ -144,8 +156,25 @@ test "$(sha256sum "$config" | cut -d ' ' -f 1)" = "$config_before"
 bad_release=$test_root/bad-slurm-log
 printf '#!/bin/sh\nexit 9\n' >"$bad_release"
 chmod 755 "$bad_release"
-if "$project_dir/update.sh" --prefix "$home_dir/prefix" --binary "$bad_release" >/dev/null 2>&1; then
+if "$installed" update --binary "$bad_release" >/dev/null 2>&1; then
     printf 'Corrupt update was accepted\n' >&2
+    exit 1
+fi
+cmp "$installed" "$release_binary"
+
+# A valid-looking older binary is rejected before the installed image changes.
+old_release=$test_root/older-slurm-log
+cat >"$old_release" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    --help) exit 0 ;;
+    --version) printf 'slurm-log 0.1.1\n'; exit 0 ;;
+esac
+exit 0
+EOF
+chmod 755 "$old_release"
+if "$installed" update --binary "$old_release" >/dev/null 2>&1; then
+    printf 'Older update was accepted\n' >&2
     exit 1
 fi
 cmp "$installed" "$release_binary"
@@ -160,9 +189,22 @@ cmp "$installed" "$release_binary"
     --no-path-update >/dev/null
 grep -q '"remoteUser": "alice.remote"' "$config"
 
-"$project_dir/uninstall.sh" --prefix "$home_dir/prefix" >/dev/null
+"$installed" uninstall >/dev/null
 test ! -e "$installed"
 test -e "$config"
+
+# Purging is a separate, explicit operation and removes only this user's app
+# configuration/state after removing the second installed binary.
+"$project_dir/install.sh" \
+    --binary "$project_dir/target/release/slurm-log" \
+    --prefix "$home_dir/purge-prefix" \
+    --no-setup --no-path-update >/dev/null
+purge_installed=$home_dir/purge-prefix/bin/slurm-log
+test -x "$purge_installed"
+"$purge_installed" uninstall --purge >/dev/null
+test ! -e "$purge_installed"
+test ! -e "$config"
+test ! -e "$home_dir/state/slurm-log"
 
 # Portable source must not contain maintainer identity or runtime artifacts.
 if grep -R -n -E 'c01bima|/home/mansur|/storage1/mansur' \

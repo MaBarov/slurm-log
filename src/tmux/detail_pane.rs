@@ -111,6 +111,32 @@ pub fn close_detail_pane(pane: &str) {
     let _ = tmux(["kill-pane", "-t", pane]);
 }
 
+pub fn close_focused_pane(session: &str, focused: &str) -> Result<()> {
+    if !pane_option(focused, "@slurm_log_detail_parent")?.is_empty() {
+        tmux(["kill-pane", "-t", focused])?;
+        return Ok(());
+    }
+    let log_panes = panes(session)?;
+    if !log_panes.iter().any(|pane| pane.id == focused) {
+        bail!("focused pane is not a slurm-log pane");
+    }
+    if log_panes.len() == 1 {
+        tmux([
+            "display-message",
+            "-t",
+            session,
+            "-d",
+            "1500",
+            "Last log pane — Ctrl-b q closes the workspace",
+        ])?;
+        return Ok(());
+    }
+    close_details_for_parent(focused);
+    tmux(["kill-pane", "-t", focused])?;
+    tmux(["select-layout", "-t", session, "tiled"])?;
+    Ok(())
+}
+
 /// Close every auxiliary details pane owned by a log pane. This is called
 /// before the owner exits so tmux cannot leave an orphaned details window.
 pub fn close_details_for_parent(parent: &str) {
