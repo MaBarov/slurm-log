@@ -1,0 +1,212 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Job {
+    pub cluster: String,
+    pub id: String,
+    pub state: String,
+    pub name: String,
+    pub elapsed: String,
+    pub reason: String,
+    pub ended: String,
+    #[serde(default)]
+    pub partition: String,
+    #[serde(default)]
+    pub start_time: String,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub exit_code: String,
+    #[serde(default)]
+    pub max_rss: String,
+    #[serde(default)]
+    pub alloc_tres: String,
+    #[serde(default)]
+    pub interactive: bool,
+}
+
+impl Job {
+    pub fn key(&self) -> String {
+        format!("{}:{}", self.cluster, self.id)
+    }
+    pub fn active(&self) -> bool {
+        self.state.starts_with("PENDING") || self.state.starts_with("RUNNING")
+    }
+    pub fn pending(&self) -> bool {
+        self.state.starts_with("PENDING")
+    }
+    pub fn running(&self) -> bool {
+        self.state.starts_with("RUNNING")
+    }
+    pub fn failed(&self) -> bool {
+        [
+            "FAILED",
+            "TIMEOUT",
+            "OUT_OF_MEMORY",
+            "NODE_FAIL",
+            "CANCELLED",
+        ]
+        .iter()
+        .any(|state| self.state.starts_with(state))
+    }
+
+    pub fn blocked_category(&self) -> bool {
+        self.interactive || self.reason.contains("DependencyNeverSatisfied")
+    }
+
+    pub fn insight(&self) -> String {
+        if self.pending() {
+            let explanation = pending_explanation(&self.reason);
+            let start = if self.start_time.is_empty()
+                || self.start_time == "N/A"
+                || self.start_time == "Unknown"
+            {
+                String::new()
+            } else {
+                format!(" · estimated start {}", self.start_time)
+            };
+            let priority = if self.priority.is_empty() {
+                String::new()
+            } else {
+                format!(" · priority {}", self.priority)
+            };
+            format!("{explanation}{start}{priority}")
+        } else if self.failed() {
+            let mut parts = Vec::new();
+            if !self.exit_code.is_empty() && self.exit_code != "0:0" {
+                parts.push(format!("exit {}", self.exit_code));
+            }
+            if !self.max_rss.is_empty() {
+                parts.push(format!("peak memory {}", self.max_rss));
+            }
+            parts.join(" · ")
+        } else {
+            String::new()
+        }
+    }
+}
+
+fn pending_explanation(reason: &str) -> String {
+    let reason = reason.trim_matches(['(', ')']);
+    let explanation = if reason == "Priority" {
+        "waiting behind higher-priority jobs"
+    } else if reason == "Resources" {
+        "waiting for requested resources"
+    } else if reason.starts_with("DependencyNeverSatisfied") {
+        "dependency can never be satisfied"
+    } else if reason.starts_with("Dependency") {
+        "waiting for a dependency"
+    } else if reason.starts_with("QOS") || reason.starts_with("Assoc") {
+        "waiting on an account or QOS limit"
+    } else if reason.starts_with("ReqNodeNotAvail") {
+        "requested node is unavailable"
+    } else if reason == "BeginTime" {
+        "waiting for its requested begin time"
+    } else if reason.starts_with("Reservation") {
+        "waiting for a reservation"
+    } else if reason.starts_with("Licenses") {
+        "waiting for a license"
+    } else if reason.is_empty() || reason == "None" {
+        "pending"
+    } else {
+        reason
+    };
+    explanation.to_string()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Pane {
+    pub id: String,
+    pub cluster: String,
+    pub job_id: String,
+}
+
+pub fn valid_job_id(id: &str) -> bool {
+    let parts: Vec<_> = id.split('_').collect();
+    (parts.len() == 1 || parts.len() == 2)
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn job_ids() {
+        assert!(valid_job_id("3202710"));
+        assert!(valid_job_id("3202690_1"));
+        assert!(!valid_job_id("3202690_1_2"));
+        assert!(!valid_job_id("abc"));
+        for invalid in ["", "_", "1_", "_1", "1-2", " 1", "1\n", "١٢٣"] {
+            assert!(!valid_job_id(invalid), "accepted invalid ID {invalid:?}");
+        }
+        for valid in ["0", "00001", "1_0", "999999999999999999999999"] {
+            assert!(valid_job_id(valid), "rejected valid ID {valid:?}");
+        }
+    }
+
+    #[test]
+    fn state_classification_handles_slurm_suffixes() {
+        for state in [
+            "FAILED",
+            "FAILED+",
+            "TIMEOUT",
+            "OUT_OF_MEMORY",
+            "NODE_FAIL",
+            "CANCELLED by 1",
+        ] {
+            assert!(
+                Job {
+                    state: state.into(),
+                    ..Job::default()
+                }
+                .failed()
+            );
+        }
+        assert!(
+            Job {
+                state: "RUNNING+".into(),
+                ..Job::default()
+            }
+            .running()
+        );
+        assert!(
+            Job {
+                state: "PENDING".into(),
+                ..Job::default()
+            }
+            .pending()
+        );
+        assert!(
+            !Job {
+                state: "COMPLETED".into(),
+                ..Job::default()
+            }
+            .active()
+        );
+    }
+
+    #[test]
+    fn insights_explain_pending_and_failed_jobs() {
+        let pending = Job {
+            state: "PENDING".into(),
+            reason: "Resources".into(),
+            start_time: "2026-08-11T18:00:00".into(),
+            priority: "1234".into(),
+            ..Job::default()
+        };
+        let insight = pending.insight();
+        assert!(insight.contains("waiting for requested resources"));
+        assert!(insight.contains("estimated start"));
+        assert!(insight.contains("priority 1234"));
+
+        let failed = Job {
+            state: "OUT_OF_MEMORY".into(),
+            exit_code: "0:9".into(),
+            max_rss: "63G".into(),
+            ..Job::default()
+        };
+        assert_eq!(failed.insight(), "exit 0:9 · peak memory 63G");
+    }
+}

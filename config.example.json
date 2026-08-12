@@ -1,0 +1,23 @@
+{
+  "clusters": [
+    {
+      "name": "local-lab",
+      "transport": "local",
+      "user": "your-local-slurm-user",
+      "accounting": false,
+      "workingDirectory": "/home/you/project"
+    },
+    {
+      "name": "remote-lab",
+      "transport": "ssh",
+      "user": "your-remote-slurm-user",
+      "sshHost": "your-ssh-config-alias",
+      "workingDirectory": "/home/you/remote-project"
+    }
+  ],
+  "sbatchBanks": [
+    {"path": "/home/you/project/cluster"},
+    {"path": "/home/you/shared-sbatch", "name": "Shared Jobs"}
+  ],
+  "statePath": "/home/you/.local/state/slurm-log/state.json"
+}
