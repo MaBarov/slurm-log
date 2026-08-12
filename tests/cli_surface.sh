@@ -149,8 +149,8 @@ expect_fail() {
 "$binary" -h >"$test_root/help-short"
 cmp "$test_root/help-long" "$test_root/help-short"
 grep -F 'slurm-log — fast, owner-scoped' "$test_root/help-long" >/dev/null
-test "$("$binary" --version)" = 'slurm-log 0.1.4'
-test "$("$binary" -V)" = 'slurm-log 0.1.4'
+test "$("$binary" --version)" = 'slurm-log 0.1.5'
+test "$("$binary" -V)" = 'slurm-log 0.1.5'
 expect_fail --does-not-exist
 expect_fail --cluster
 expect_fail --lines nope
