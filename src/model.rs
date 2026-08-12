@@ -209,4 +209,58 @@ mod tests {
         };
         assert_eq!(failed.insight(), "exit 0:9 · peak memory 63G");
     }
+
+    #[test]
+    fn insights_cover_every_scheduler_reason_and_empty_metadata() {
+        let cases = [
+            ("Priority", "higher-priority"),
+            ("(DependencyNeverSatisfied,foo)", "can never"),
+            ("Dependency", "a dependency"),
+            ("QOSGrpCpuLimit", "account or QOS"),
+            ("AssocMaxJobsLimit", "account or QOS"),
+            ("ReqNodeNotAvail", "node is unavailable"),
+            ("BeginTime", "begin time"),
+            ("Reservation", "reservation"),
+            ("Licenses", "license"),
+            ("None", "pending"),
+            ("", "pending"),
+            ("UnusualReason", "UnusualReason"),
+        ];
+        for (reason, expected) in cases {
+            let job = Job {
+                state: "PENDING".into(),
+                reason: reason.into(),
+                start_time: "N/A".into(),
+                ..Job::default()
+            };
+            assert!(job.insight().contains(expected), "reason={reason}");
+        }
+        let unknown = Job {
+            state: "PENDING".into(),
+            start_time: "Unknown".into(),
+            ..Job::default()
+        };
+        assert_eq!(unknown.insight(), "pending");
+    }
+
+    #[test]
+    fn job_helpers_cover_keys_blocking_and_empty_insights() {
+        let mut job = Job {
+            cluster: "alpha".into(),
+            id: "42".into(),
+            state: "COMPLETED".into(),
+            ..Job::default()
+        };
+        assert_eq!(job.key(), "alpha:42");
+        assert_eq!(job.insight(), "");
+        assert!(!job.blocked_category());
+        job.interactive = true;
+        assert!(job.blocked_category());
+
+        job.state = "FAILED".into();
+        job.exit_code = "0:0".into();
+        assert_eq!(job.insight(), "");
+        job.max_rss = "1G".into();
+        assert_eq!(job.insight(), "peak memory 1G");
+    }
 }

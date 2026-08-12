@@ -4,7 +4,7 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 test_root=$(mktemp -d)
 session=slurm-log-bank-ui-$$
 cleanup() {
@@ -24,6 +24,8 @@ tmux new-session -d -s bank-ui-bootstrap sleep 120
 printf '#!/bin/sh\n#SBATCH --job-name=local\n' >"$test_root/bank/local_train.sbatch"
 printf '#!/bin/sh\n#SBATCH --job-name=remote\n' >"$test_root/bank/remote_train.sbatch"
 printf '#!/bin/sh\n#SBATCH --job-name=shared\n' >"$test_root/bank/train.sbatch"
+mkdir -p "$test_root/bank/group"
+printf '#!/bin/sh\n#SBATCH --job-name=nested\n' >"$test_root/bank/group/nested.sbatch"
 config=$test_root/config.json
 cat >"$test_root/bin/sbatch" <<'EOF'
 #!/bin/sh
@@ -127,7 +129,7 @@ while :; do
     test "$attempt" -lt 500 || exit 1
     sleep 0.01
 done
-tmux send-keys -t "$session" Right Down Enter
+tmux send-keys -t "$session" Right Down Right Down Down Enter
 attempt=0
 while :; do
     screen=$(tmux capture-pane -p -t "$session" 2>/dev/null || true)
@@ -167,5 +169,82 @@ while :; do
         exit 1
     }
     sleep 0.01
+done
+
+# A separate normally exiting picker drives the remaining navigation, search,
+# refresh, nested-folder, reverse-tab, and cancelled-confirmation branches.
+keyboard_session=${session}-keys
+tmux new-session -d -x 110 -y 20 -s "$keyboard_session" \
+    env PATH="$test_root/bin:/usr/local/bin:/usr/bin:/bin" \
+    BANK_UI_SUBMIT_INPUT="$test_root/cancelled.sbatch" \
+    SLURM_LOG_CONFIG="$config" "$binary" bank
+attempt=0
+while :; do
+    screen=$(tmux capture-pane -p -t "$keyboard_session" 2>/dev/null || true)
+    case "$screen" in *'SUBMIT TO  [local]  remote'*) break ;; esac
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || exit 1
+    sleep 0.01
+done
+tmux send-keys -t "$keyboard_session" Right Down Right Left Up
+tmux send-keys -t "$keyboard_session" / cancelled Escape
+tmux send-keys -t "$keyboard_session" / localx BSpace Enter
+sleep 0.05
+tmux send-keys -t "$keyboard_session" Escape Tab BTab r Home Down Down Enter
+attempt=0
+while :; do
+    screen=$(tmux capture-pane -p -t "$keyboard_session" 2>/dev/null || true)
+    case "$screen" in *'Press y to submit and open its pane'*) break ;; esac
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || { printf 'Cancelled submit prompt missing\n' >&2; exit 1; }
+    sleep 0.01
+done
+tmux send-keys -t "$keyboard_session" n
+attempt=0
+while :; do
+    screen=$(tmux capture-pane -p -t "$keyboard_session" 2>/dev/null || true)
+    case "$screen" in *'SBATCH BANK  ·  SUBMIT TO'*) break ;; esac
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || exit 1
+    sleep 0.01
+done
+tmux send-keys -t "$keyboard_session" Escape
+attempt=0
+while :; do
+    screen=$(tmux capture-pane -p -t "$keyboard_session" 2>/dev/null || true)
+    case "$screen" in *'search=""'*) break ;; esac
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || exit 1
+    sleep 0.01
+done
+tmux send-keys -t "$keyboard_session" q
+attempt=0
+while tmux has-session -t "$keyboard_session" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || exit 1
+    sleep 0.01
+done
+test ! -e "$test_root/cancelled.sbatch"
+
+# An unavailable configured bank becomes a visible warning and a usable empty
+# picker rather than aborting setup or trying to traverse elsewhere.
+missing_session=${session}-missing
+missing_config=$test_root/missing-config.json
+printf '%s\n' "{\"clusters\":[{\"name\":\"local\",\"transport\":\"local\",\"user\":\"offline\",\"workingDirectory\":\"$test_root\",\"accounting\":false}],\"sbatchBanks\":[{\"path\":\"$test_root/does-not-exist\",\"name\":\"Missing\"}],\"statePath\":\"$test_root/state/missing.json\"}" >"$missing_config"
+tmux new-session -d -x 110 -y 20 -s "$missing_session" \
+    env PATH="$test_root/bin:/usr/local/bin:/usr/bin:/bin" \
+    SLURM_LOG_CONFIG="$missing_config" "$binary" bank
+attempt=0
+while :; do
+    screen=$(tmux capture-pane -p -t "$missing_session" 2>/dev/null || true)
+    case "$screen" in *'0 shown / 0 scripts'*'⚠ 1'*) break ;; esac
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || { printf 'Missing bank warning not rendered:\n%s\n' "$screen" >&2; exit 1; }
+    sleep 0.01
+done
+tmux send-keys -t "$missing_session" s
+attempt=0
+while tmux has-session -t "$missing_session" 2>/dev/null; do
+    attempt=$((attempt + 1)); test "$attempt" -lt 500; sleep 0.01
 done
 printf 'bank_ui: ok (cluster filters + reliable submit/open confirmation; fully offline)\n'

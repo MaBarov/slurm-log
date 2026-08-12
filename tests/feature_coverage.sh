@@ -4,7 +4,7 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 manifest=$project_dir/tests/feature_manifest.tsv
 test -r "$manifest"
 
@@ -60,6 +60,10 @@ for feature in \
     picker.reference_page picker.quit workspace.popup_j_a workspace.details_i \
     workspace.auto_add_A workspace.close_pane_x workspace.zoom_z \
     workspace.smart_close_q workspace.mouse_selection_copy; do
+    require_feature "$feature"
+done
+
+for feature in details.ambiguous_cluster details.missing_cluster_hint cluster.partial_failure; do
     require_feature "$feature"
 done
 

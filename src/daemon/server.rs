@@ -70,81 +70,9 @@ fn handle_stream(
                 bail!("invalid job ID {id}");
             }
             let key = format!("{cluster}\0{id}");
-            let mut previous = None;
-            let cached = {
-                let mut entries = detail_cache
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                entries.retain(|_, entry| entry.last_access.elapsed() < Duration::from_secs(60));
-                entries.get_mut(&key).and_then(|entry| {
-                    entry.last_access = Instant::now();
-                    previous = Some(entry.details.clone());
-                    let base = if entry.details.terminal {
-                        DETAIL_TTL
-                    } else {
-                        ACTIVE_DETAIL_TTL
-                    };
-                    let normal = base.saturating_mul(1_u32 << entry.failures.min(2));
-                    let minimum = if force { FORCED_DETAIL_MINIMUM } else { normal };
-                    (entry.details.terminal || entry.created.elapsed() < minimum)
-                        .then(|| entry.details.clone())
-                })
-            };
-            let details = if let Some(details) = cached {
-                Ok(details)
-            } else {
-                crate::details::fetch(config, &cluster, &id, previous.as_ref())
-            };
-            let reply = match details {
-                Ok(details) => {
-                    let now = Instant::now();
-                    let mut entries = detail_cache
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    if entries.len() >= 64
-                        && !entries.contains_key(&key)
-                        && let Some(oldest) = entries
-                            .iter()
-                            .min_by_key(|(_, value)| value.last_access)
-                            .map(|(key, _)| key.clone())
-                    {
-                        entries.remove(&oldest);
-                    }
-                    entries.insert(
-                        key,
-                        DetailEntry {
-                            created: now,
-                            last_access: now,
-                            failures: 0,
-                            details: details.clone(),
-                        },
-                    );
-                    Reply {
-                        details: Some(details),
-                        ..empty_reply()
-                    }
-                }
-                Err(error) => {
-                    let mut entries = detail_cache
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    if let Some(entry) = entries.get_mut(&key) {
-                        entry.failures = entry.failures.saturating_add(1);
-                        entry.created = Instant::now();
-                        let mut stale = entry.details.clone();
-                        stale.stale_error = format!("{error:#}");
-                        Reply {
-                            details: Some(stale),
-                            ..empty_reply()
-                        }
-                    } else {
-                        Reply {
-                            error: Some(format!("{error:#}")),
-                            ..empty_reply()
-                        }
-                    }
-                }
-            };
+            let reply = resolve_detail_reply(detail_cache, key, force, |previous| {
+                crate::details::fetch(config, &cluster, &id, previous)
+            });
             write_reply(stream, &reply)?;
             return Ok(false);
         }
@@ -230,4 +158,101 @@ fn handle_stream(
     };
     write_reply(stream, &reply)?;
     Ok(false)
+}
+
+fn resolve_detail_reply(
+    detail_cache: &DetailCache,
+    key: String,
+    force: bool,
+    fetch: impl FnOnce(Option<&JobDetails>) -> Result<JobDetails>,
+) -> Reply {
+    let (cached, previous) = {
+        let mut entries = detail_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cached_detail(&mut entries, &key, force)
+    };
+    let result = cached.map_or_else(|| fetch(previous.as_ref()), Ok);
+    let mut entries = detail_cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    match result {
+        Ok(details) => store_detail(&mut entries, key, details),
+        Err(error) => failed_detail(&mut entries, &key, &error),
+    }
+}
+
+fn cached_detail(
+    entries: &mut HashMap<String, DetailEntry>,
+    key: &str,
+    force: bool,
+) -> (Option<JobDetails>, Option<JobDetails>) {
+    entries.retain(|_, entry| entry.last_access.elapsed() < Duration::from_secs(60));
+    let mut previous = None;
+    let cached = entries.get_mut(key).and_then(|entry| {
+        entry.last_access = Instant::now();
+        previous = Some(entry.details.clone());
+        let base = if entry.details.terminal {
+            DETAIL_TTL
+        } else {
+            ACTIVE_DETAIL_TTL
+        };
+        let normal = base.saturating_mul(1_u32 << entry.failures.min(2));
+        let minimum = if force { FORCED_DETAIL_MINIMUM } else { normal };
+        (entry.details.terminal || entry.created.elapsed() < minimum)
+            .then(|| entry.details.clone())
+    });
+    (cached, previous)
+}
+
+fn store_detail(
+    entries: &mut HashMap<String, DetailEntry>,
+    key: String,
+    details: JobDetails,
+) -> Reply {
+    if entries.len() >= 64
+        && !entries.contains_key(&key)
+        && let Some(oldest) = entries
+            .iter()
+            .min_by_key(|(_, value)| value.last_access)
+            .map(|(key, _)| key.clone())
+    {
+        entries.remove(&oldest);
+    }
+    let now = Instant::now();
+    entries.insert(
+        key,
+        DetailEntry {
+            created: now,
+            last_access: now,
+            failures: 0,
+            details: details.clone(),
+        },
+    );
+    Reply {
+        details: Some(details),
+        ..empty_reply()
+    }
+}
+
+fn failed_detail(
+    entries: &mut HashMap<String, DetailEntry>,
+    key: &str,
+    error: &anyhow::Error,
+) -> Reply {
+    if let Some(entry) = entries.get_mut(key) {
+        entry.failures = entry.failures.saturating_add(1);
+        entry.created = Instant::now();
+        let mut stale = entry.details.clone();
+        stale.stale_error = format!("{error:#}");
+        Reply {
+            details: Some(stale),
+            ..empty_reply()
+        }
+    } else {
+        Reply {
+            error: Some(format!("{error:#}")),
+            ..empty_reply()
+        }
+    }
 }

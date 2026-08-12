@@ -192,6 +192,7 @@ fn run() -> Result<()> {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("session required"))?,
             args.lines,
+            args.refresh.max(3),
         )?;
         return Ok(());
     }
@@ -269,12 +270,11 @@ fn run() -> Result<()> {
         for pane in panes {
             let key = format!("{}:{}", pane.cluster, pane.job_id);
             if visible_keys.insert(key.clone()) {
-                jobs.push(open_metadata.remove(&key).unwrap_or_else(|| Job {
-                    cluster: pane.cluster,
-                    id: pane.job_id,
-                    state: "OPEN".into(),
-                    ..Job::default()
-                }));
+                jobs.push(
+                    open_metadata
+                        .remove(&key)
+                        .unwrap_or_else(|| open_pane_job(pane.cluster, pane.job_id)),
+                );
             }
         }
         let chosen = ui::pick(
@@ -347,8 +347,7 @@ fn run() -> Result<()> {
             .count();
         let jobs = slurm::visible_jobs(jobs, &ledger, history_mode, filter == "blocked");
         if args.mode == "watch" {
-            print!("\x1b[H\x1b[2J");
-            render(&jobs, &warnings);
+            render_watch(&jobs, &warnings);
             thread::sleep(Duration::from_secs(args.refresh));
             continue;
         }
@@ -391,5 +390,20 @@ fn run() -> Result<()> {
             return Ok(());
         }
         tmux::open(&config, &chosen.jobs, args.lines, chosen.show_log_warnings)?;
+        return Ok(());
     }
+}
+
+fn open_pane_job(cluster: String, id: String) -> Job {
+    Job {
+        cluster,
+        id,
+        state: "OPEN".into(),
+        ..Job::default()
+    }
+}
+
+fn render_watch(jobs: &[Job], warnings: &[String]) {
+    print!("\x1b[H\x1b[2J");
+    render(jobs, warnings);
 }

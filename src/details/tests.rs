@@ -21,6 +21,8 @@ fn parses_units_durations_and_gpu_tres() {
         3_905 * 1024 * 1024
     );
     assert_eq!(display_requested_memory("3905M"), "3905M");
+    assert_eq!(parse_bytes(&format!("{}G", "9".repeat(400))), None);
+    assert_eq!(parse_gpus("malformed,cpu=8"), (0, String::new()));
     assert!(refresh_phase("42") < 10_000);
 }
 
@@ -161,6 +163,49 @@ fn live_control_deduplicates_typed_gpus_and_ignores_default_memory_sentinel() {
 }
 
 #[test]
+fn queue_fallback_preserves_live_identity_and_parses_elapsed_time() {
+    let details = from_live_queue(Job {
+        cluster: "sprint".into(),
+        id: "42".into(),
+        name: "training".into(),
+        state: "RUNNING".into(),
+        reason: "None".into(),
+        partition: "gpu".into(),
+        start_time: "start".into(),
+        elapsed: "01:02".into(),
+        ..Job::default()
+    });
+    assert_eq!(details.cluster, "sprint");
+    assert_eq!(details.name, "training");
+    assert_eq!(details.elapsed_seconds, 62);
+    assert_eq!(details.source, "squeue");
+    assert!(!details.terminal);
+}
+
+#[test]
+fn metric_parsers_cover_zero_overflow_units_suffixes_and_tres_aliases() {
+    assert_eq!(cpu_efficiency(1, 0, 8), None);
+    assert_eq!(cpu_efficiency(8, 1, 1), Some(800.0));
+    assert_eq!(cpu_efficiency(20, 1, 1), None);
+    assert_eq!(parse_duration("0"), Some(0));
+    assert_eq!(parse_duration("100:00:00"), Some(360_000));
+    assert_eq!(parse_duration("bad"), None);
+    assert_eq!(parse_duration("1:bad"), None);
+    assert_eq!(parse_bytes("1K"), Some(1024));
+    assert_eq!(parse_bytes("2M"), Some(2 * 1024 * 1024));
+    assert_eq!(parse_bytes("3T"), Some(3 * 1024_u64.pow(4)));
+    assert_eq!(parse_bytes("5B"), Some(5));
+    assert_eq!(parse_bytes("-1G"), None);
+    assert_eq!(parse_bytes("1XB"), None);
+    assert_eq!(
+        tres_value("cpu=8,foo/gres/gpuutil=72", "gres/gpuutil"),
+        Some("72")
+    );
+    assert_eq!(tres_number("cpu=8", "cpu"), Some(8));
+    assert_eq!(parse_gpus("gpu=2"), (2, String::new()));
+}
+
+#[test]
 fn running_accounting_lag_does_not_report_false_zero_cpu() {
     let line = "7|train|RUNNING|None|gpu|acct|normal|sub|start|Unknown|00:00:10|10|01:00:00|1|8|8|8|4G|||cpu=8,mem=4G|cpu=8,mem=4G|00:00:00|80|0:0|node1||";
     let parsed = parse_accounting(line, "cispa", "7").unwrap();
@@ -238,6 +283,97 @@ fn slurm_time_sentinels_and_impossible_cpu_samples_are_not_displayed() {
         ..JobDetails::default()
     };
     assert_eq!(cpu_percent(&corrupt), "collecting…");
+}
+
+#[test]
+fn renderers_cover_full_compact_terminal_stale_and_metric_states() {
+    let mut details = JobDetails {
+        cluster: "alpha".into(),
+        id: "42".into(),
+        name: "training".into(),
+        state: "RUNNING".into(),
+        reason: "None".into(),
+        partition: "gpu".into(),
+        account: "research".into(),
+        qos: "normal".into(),
+        submit: "submit".into(),
+        start: "start".into(),
+        end: "Unknown".into(),
+        elapsed: "00:02:00".into(),
+        elapsed_seconds: 120,
+        time_limit: "01:00:00".into(),
+        nodes: 1,
+        cpus: 8,
+        requested_cpus: 8,
+        memory_bytes: 16 * 1024 * 1024 * 1024,
+        requested_memory: "16G".into(),
+        max_rss_bytes: 8 * 1024 * 1024 * 1024,
+        gpus: 2,
+        gpu_types: "a100".into(),
+        total_cpu_seconds: 60,
+        cpu_efficiency: Some(6.25),
+        memory_efficiency: Some(50.0),
+        alloc_tres: "cpu=8,mem=16G,gres/gpu=2".into(),
+        req_tres: "cpu=8,mem=16G,gres/gpu=2".into(),
+        node_list: "node-a".into(),
+        exit_code: "0:0".into(),
+        source: "sstat".into(),
+        sampled_at: "now".into(),
+        stale_error: "temporary lag".into(),
+        ..JobDetails::default()
+    };
+    let cpu = VecDeque::from([0.0, 25.0, 50.0, 75.0, 100.0]);
+    let memory = VecDeque::from([100.0, 50.0]);
+    draw(&details, false, true, "paused manually", &cpu, &memory).unwrap();
+    draw(&details, true, false, "", &cpu, &memory).unwrap();
+
+    assert_eq!(clean(""), "—");
+    assert_eq!(clean("Unknown"), "—");
+    assert_eq!(clean("None"), "—");
+    assert_eq!(clean("value"), "value");
+    assert_eq!(percent(Some(12.345)), "12.3%");
+    assert_eq!(percent(Some(f64::NAN)), "not available");
+    assert_eq!(percent(Some(-1.0)), "not available");
+    assert_eq!(percent(Some(1_001.0)), "not available");
+    assert_eq!(bytes(0), "—");
+    assert_eq!(bytes(1), "1.0 B");
+    assert_eq!(bytes(1024), "1.0 KiB");
+    assert_eq!(bytes(1024_u64.pow(4)), "1.0 TiB");
+    assert_eq!(spark(&VecDeque::new()), "collecting…");
+    assert_eq!(spark(&cpu).chars().count(), 5);
+    assert!(hint(&details).unwrap().contains("GPU utilization"));
+
+    details.gpu_utilization = Some(0.0);
+    assert!(hint(&details).unwrap().contains("CPU utilization"));
+    details.cpu_efficiency = Some(80.0);
+    details.memory_efficiency = Some(90.0);
+    assert!(hint(&details).unwrap().contains("Peak memory"));
+    details.memory_efficiency = Some(20.0);
+    assert_eq!(hint(&details), None);
+    details.terminal = true;
+    details.stale_error.clear();
+    draw(&details, false, false, "", &cpu, &memory).unwrap();
+    print_text(&details);
+}
+
+#[test]
+fn metric_labels_cover_recorded_and_missing_gpu_and_memory() {
+    let mut details = JobDetails {
+        state: "COMPLETED".into(),
+        gpus: 1,
+        gpu_utilization: Some(98.25),
+        memory_efficiency: Some(11.5),
+        cpu_efficiency: None,
+        ..JobDetails::default()
+    };
+    assert_eq!(cpu_percent(&details), "not available");
+    assert_eq!(memory_usage(&details), "11.5%");
+    assert_eq!(gpu_usage(&details), "98.2%");
+    details.gpu_utilization = None;
+    details.max_rss_bytes = 0;
+    details.memory_efficiency = None;
+    assert_eq!(memory_usage(&details), "not available");
+    assert_eq!(gpu_usage(&details), "not recorded");
 }
 
 #[test]

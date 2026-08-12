@@ -75,6 +75,16 @@ pub fn text_with_input(
     input: &[u8],
     directory: Option<&Path>,
 ) -> Result<String> {
+    text_with_input_limit(program, args, input, directory, MAX_COMMAND_OUTPUT_BYTES)
+}
+
+fn text_with_input_limit(
+    program: &str,
+    args: &[&str],
+    input: &[u8],
+    directory: Option<&Path>,
+    limit: usize,
+) -> Result<String> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -87,8 +97,8 @@ pub fn text_with_input(
     let mut child = command.spawn().with_context(|| format!("run {program}"))?;
     let stdout = child.stdout.take().context("capture command stdout")?;
     let stderr = child.stderr.take().context("capture command stderr")?;
-    let stdout_reader = thread::spawn(move || read_bounded(stdout, MAX_COMMAND_OUTPUT_BYTES));
-    let stderr_reader = thread::spawn(move || read_bounded(stderr, MAX_COMMAND_OUTPUT_BYTES));
+    let stdout_reader = thread::spawn(move || read_bounded(stdout, limit));
+    let stderr_reader = thread::spawn(move || read_bounded(stderr, limit));
     child
         .stdin
         .take()
@@ -190,5 +200,28 @@ mod tests {
             ]
             .concat()
         );
+    }
+
+    #[test]
+    fn bounded_input_command_reports_failures_and_output_overflow() {
+        let error = text_with_input_limit(
+            "sh",
+            &["-c", "cat >/dev/null; printf rejected >&2; exit 9"],
+            b"input",
+            None,
+            1024,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("rejected"));
+
+        let error = text_with_input_limit(
+            "sh",
+            &["-c", "cat >/dev/null; printf 0123456789"],
+            b"input",
+            None,
+            4,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("safety limit"));
     }
 }

@@ -439,3 +439,6 @@ mod tests {
         assert!(value.validate().is_err());
     }
 }
+#[cfg(test)]
+#[path = "config/tests/extra.rs"]
+mod tests_extra;

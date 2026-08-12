@@ -56,7 +56,11 @@ pub fn all_jobs_direct(
                 cached_jobs(
                     &cache_path(
                         config,
-                        &format!("{}-{item}", if archive { "archive" } else { "recent" }),
+                        &if archive {
+                            format!("archive-{item}-{}d", archive_horizon_days())
+                        } else {
+                            format!("recent-{item}")
+                        },
                     ),
                     if archive {
                         ARCHIVE_CACHE_TTL
@@ -179,7 +183,18 @@ pub fn recently_ended(job: &Job, seconds: i64) -> bool {
     }
     let parsed = OffsetDateTime::parse(&job.ended, &Rfc3339).or_else(|_| {
         let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-        OffsetDateTime::parse(&format!("{}{}", job.ended, offset), &Rfc3339)
+        let seconds = offset.whole_seconds();
+        let sign = if seconds < 0 { '-' } else { '+' };
+        let minutes = seconds.unsigned_abs() / 60;
+        OffsetDateTime::parse(
+            &format!(
+                "{}{sign}{:02}:{:02}",
+                job.ended,
+                minutes / 60,
+                minutes % 60
+            ),
+            &Rfc3339,
+        )
     });
     parsed.is_ok_and(|ended| {
         let age = (OffsetDateTime::now_utc() - ended).whole_seconds();

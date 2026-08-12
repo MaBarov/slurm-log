@@ -4,7 +4,7 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 test_root=$(mktemp -d)
 case "$test_root" in /tmp/*) ;; *) exit 1 ;; esac
 tmux_root=$test_root/tmux
@@ -314,6 +314,20 @@ while :; do
     test "$ids" = '500 501 ' && break
     attempt=$((attempt + 1)); test "$attempt" -lt 500 || {
         printf 'Selection opened wrong panes: %s\n' "$ids" >&2; exit 1;
+    }
+    sleep 0.01
+done
+# Let the picker process return normally after switch-client so destructors and
+# instrumented profiles are flushed before the private tmux server is removed.
+attempt=0
+while tmux_test has-session -t "$open_session" 2>/dev/null \
+    && test "$(tmux_test display-message -p -t "$open_session" '#{pane_dead}')" != 1; do
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || {
+        tmux_test list-panes -t "$open_session" \
+            -F 'dead=#{pane_dead} status=#{pane_dead_status} command=#{pane_current_command} start=#{pane_start_command}' >&2 || true
+        printf 'picker did not exit after opening workspace\n' >&2
+        exit 1
     }
     sleep 0.01
 done

@@ -5,6 +5,40 @@ enum DirectoryChoice {
     Enter(PathBuf),
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum BrowserKey {
+    Continue,
+    Activate,
+    Cancel,
+}
+
+fn apply_browser_key(
+    code: KeyCode,
+    current: &mut Option<PathBuf>,
+    focus: &mut usize,
+    choices: usize,
+) -> BrowserKey {
+    match code {
+        KeyCode::Up | KeyCode::Char('k') => *focus = focus.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => {
+            *focus = (*focus + 1).min(choices.saturating_sub(1));
+        }
+        KeyCode::Home | KeyCode::Char('g') => *focus = 0,
+        KeyCode::End | KeyCode::Char('G') => *focus = choices.saturating_sub(1),
+        KeyCode::Enter | KeyCode::Right => return BrowserKey::Activate,
+        KeyCode::Left | KeyCode::Backspace => {
+            *current = current
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf);
+            *focus = 0;
+        }
+        KeyCode::Esc | KeyCode::Char('q') => return BrowserKey::Cancel,
+        _ => {}
+    }
+    BrowserKey::Continue
+}
+
 fn safe_terminal_name(value: &std::ffi::OsStr) -> String {
     value
         .to_string_lossy()
@@ -114,27 +148,13 @@ fn browse_bank_directory(starting_roots: &[PathBuf]) -> Result<Option<PathBuf>> 
         out.flush()?;
         let mut activate = false;
         match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => focus = focus.saturating_sub(1),
-                KeyCode::Down | KeyCode::Char('j') => {
-                    focus = (focus + 1).min(choices.len().saturating_sub(1));
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                match apply_browser_key(key.code, &mut current, &mut focus, choices.len()) {
+                    BrowserKey::Activate => activate = true,
+                    BrowserKey::Cancel => return Ok(None),
+                    BrowserKey::Continue => {}
                 }
-                KeyCode::Home | KeyCode::Char('g') => focus = 0,
-                KeyCode::End | KeyCode::Char('G') => {
-                    focus = choices.len().saturating_sub(1);
-                }
-                KeyCode::Enter | KeyCode::Right => activate = true,
-                KeyCode::Left | KeyCode::Backspace => {
-                    if let Some(parent) = current.as_deref().and_then(Path::parent) {
-                        current = Some(parent.to_path_buf());
-                    } else {
-                        current = None;
-                    }
-                    focus = 0;
-                }
-                KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
-                _ => {}
-            },
+            }
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) if mouse.row >= 4 => {
                     let index = top + usize::from(mouse.row - 4);

@@ -202,6 +202,73 @@ fn selected_submission_target_is_obvious_in_cluster_tabs() {
 }
 
 #[test]
+fn bank_rows_cover_nested_expansion_cluster_filtering_and_search() {
+    let script = |path: &str, origin: Option<&str>| Script {
+        bank: "bank".into(),
+        relative: PathBuf::from(path),
+        name: path.into(),
+        directives: Vec::new(),
+        origin: origin.map(str::to_string),
+        bytes: Vec::new(),
+    };
+    let scripts = vec![
+        script("one/two/train.sbatch", None),
+        script("one/eval.sbatch", Some("local")),
+        script("top.sbatch", None),
+        script("remote-only.sbatch", Some("remote")),
+    ];
+    let banks = [
+        LoadedBank {
+            name: "bank".into(),
+            first: 0,
+            last: 3,
+        },
+        LoadedBank {
+            name: "remote".into(),
+            first: 3,
+            last: 4,
+        },
+    ];
+
+    let closed = rows(&banks, &scripts, &HashSet::new(), "", "local");
+    assert_eq!(closed.len(), 1);
+    assert!(matches!(closed[0], BankRow::Bank(0, false, 3)));
+
+    let bank_open = HashSet::from([Expanded::Bank(0)]);
+    let first_level = rows(&banks, &scripts, &bank_open, "", "local");
+    assert!(first_level.iter().any(|row| {
+        matches!(row, BankRow::Directory(0, path, 2, false) if path == Path::new("one"))
+    }));
+    assert!(
+        first_level
+            .iter()
+            .any(|row| matches!(row, BankRow::File(2, 1)))
+    );
+    assert!(
+        !first_level
+            .iter()
+            .any(|row| matches!(row, BankRow::File(0, _)))
+    );
+
+    let fully_open = HashSet::from([
+        Expanded::Bank(0),
+        Expanded::Directory(0, PathBuf::from("one")),
+        Expanded::Directory(0, PathBuf::from("one/two")),
+    ]);
+    let nested = rows(&banks, &scripts, &fully_open, "", "local");
+    assert!(nested.iter().any(|row| {
+        matches!(row, BankRow::Directory(0, path, 3, true) if path == Path::new("one/two"))
+    }));
+    assert!(nested.iter().any(|row| matches!(row, BankRow::File(0, 3))));
+    assert!(nested.iter().any(|row| matches!(row, BankRow::File(1, 2))));
+
+    let found = rows(&banks, &scripts, &HashSet::new(), "TWO/TRAIN", "local");
+    assert_eq!(found.len(), 1);
+    assert!(matches!(found[0], BankRow::File(0, 1)));
+    assert!(rows(&banks, &scripts, &HashSet::new(), "eval", "remote").is_empty());
+}
+
+#[test]
 fn private_bank_cache_round_trips_without_changing_payload() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("bank");

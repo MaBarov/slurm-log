@@ -90,6 +90,8 @@ details.running_array_no_sacct	details_pane.sh
 details.pause_resume_refresh	details_pane.sh
 details.close_all_keys	details_pane.sh
 details.parent_pairing	details_pane.sh
+details.ambiguous_cluster	degraded_clusters.sh
+details.missing_cluster_hint	degraded_clusters.sh
 follow.pending_log_appears	interactive_pane.sh
 follow.warning_filter	cli_surface.sh
 follow.exception_visibility	cli_surface.sh
@@ -102,6 +104,7 @@ bank.multi_select_open	bank_ui.sh
 cluster.accounting_unavailable	cluster_tabs.sh
 cluster.tab_selection_persistence	cluster_tabs.sh
 cluster.archive_tabs	cluster_tabs.sh
+cluster.partial_failure	degraded_clusters.sh
 setup.ssh_discovery	setup_wizard.sh
 setup.bank_discovery	setup_wizard.sh
 setup.manual_bank_picker	setup_wizard.sh

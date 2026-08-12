@@ -5,7 +5,7 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 test_root=$(mktemp -d)
 main_session=slurm-log-cluster-main-$$
 popup_session=slurm-log-cluster-popup-$$

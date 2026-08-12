@@ -165,7 +165,11 @@ fn ssh_config_aliases() -> Vec<String> {
     let Some(home) = std::env::var_os("HOME") else {
         return Vec::new();
     };
-    let mut pending = vec![PathBuf::from(home).join(".ssh/config")];
+    ssh_config_aliases_from(&PathBuf::from(home))
+}
+
+fn ssh_config_aliases_from(home: &Path) -> Vec<String> {
+    let mut pending = vec![home.join(".ssh/config")];
     let mut seen = BTreeSet::new();
     let mut aliases = BTreeSet::new();
     while let Some(path) = pending.pop() {
@@ -207,6 +211,28 @@ impl Drop for PickerGuard {
         let _ = terminal::disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PickerKey {
+    Continue,
+    Select,
+    Cancel,
+}
+
+fn apply_picker_key(code: KeyCode, focus: &mut usize, count: usize) -> PickerKey {
+    match code {
+        KeyCode::Up | KeyCode::Char('k') => *focus = focus.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => {
+            *focus = (*focus + 1).min(count.saturating_sub(1));
+        }
+        KeyCode::Home | KeyCode::Char('g') => *focus = 0,
+        KeyCode::End | KeyCode::Char('G') => *focus = count.saturating_sub(1),
+        KeyCode::Enter => return PickerKey::Select,
+        KeyCode::Esc | KeyCode::Char('q') => return PickerKey::Cancel,
+        _ => {}
+    }
+    PickerKey::Continue
 }
 
 struct FolderPickerGuard;
@@ -264,16 +290,10 @@ fn pick_ssh_alias(aliases: &[String], current: &str) -> Result<Option<String>> {
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => focus = focus.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                focus = (focus + 1).min(aliases.len().saturating_sub(1));
-            }
-            KeyCode::Home | KeyCode::Char('g') => focus = 0,
-            KeyCode::End | KeyCode::Char('G') => focus = aliases.len() - 1,
-            KeyCode::Enter => return Ok(Some(aliases[focus].clone())),
-            KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
-            _ => {}
+        match apply_picker_key(key.code, &mut focus, aliases.len()) {
+            PickerKey::Select => return Ok(Some(aliases[focus].clone())),
+            PickerKey::Cancel => return Ok(None),
+            PickerKey::Continue => {}
         }
     }
 }
@@ -370,3 +390,6 @@ include!("setup/configure.rs");
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "setup/tests/coverage.rs"]
+mod tests_coverage;

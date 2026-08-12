@@ -37,6 +37,56 @@ fn auto_add_baselines_existing_running_jobs() {
 }
 
 #[test]
+fn monitor_state_reports_start_failure_and_new_active_jobs() {
+    let mut state = MonitorState::new(vec![job("pending", "PENDING"), job("fail", "PENDING")]);
+    let update = state.update(
+        vec![
+            job("pending", "RUNNING"),
+            job("fail", "FAILED"),
+            job("new", "PENDING"),
+        ],
+        &[],
+    );
+    assert_eq!(update.additions.len(), 2);
+    assert!(
+        update
+            .events
+            .iter()
+            .any(|event| matches!(event, MonitorEvent::Started(job) if job.id == "pending"))
+    );
+    assert!(
+        update
+            .events
+            .iter()
+            .any(|event| matches!(event, MonitorEvent::Failed(job) if job.id == "fail"))
+    );
+}
+
+#[test]
+fn monitor_state_requires_two_clean_misses_before_pending_vanishes() {
+    let mut state = MonitorState::new(vec![job("pending", "PENDING")]);
+    assert!(state.update(Vec::new(), &[]).events.is_empty());
+    let update = state.update(Vec::new(), &[]);
+    assert!(matches!(
+        update.events.as_slice(),
+        [MonitorEvent::Vanished(job)] if job.id == "pending"
+    ));
+    assert!(state.update(Vec::new(), &[]).events.is_empty());
+}
+
+#[test]
+fn monitor_state_does_not_treat_cluster_outage_as_job_vanishing() {
+    let mut state = MonitorState::new(vec![job("pending", "PENDING")]);
+    for _ in 0..3 {
+        let update = state.update(Vec::new(), &["CISPA scheduler unavailable".into()]);
+        assert!(update.events.is_empty());
+    }
+    // Seeing the pending job again resets its consecutive-miss counter.
+    state.update(vec![job("pending", "PENDING")], &[]);
+    assert!(state.update(Vec::new(), &[]).events.is_empty());
+}
+
+#[test]
 fn one_or_zero_log_panes_are_safe_to_close_without_confirmation() {
     assert!(!confirmation_needed(0));
     assert!(!confirmation_needed(1));
@@ -118,4 +168,59 @@ fn reconciliation_keeps_one_anchor_for_a_total_replacement() {
     let (remove_first, anchor) = obsolete_panes(&current, &desired);
     assert!(remove_first.is_empty());
     assert_eq!(anchor.map(|pane| pane.id.as_str()), Some("%1"));
+}
+
+#[test]
+fn empty_workspace_split_arguments_and_startup_errors_are_deterministic() {
+    let config = Config {
+        local_user: "offline".into(),
+        remote_user: "offline".into(),
+        ssh_host: String::new(),
+        state_path: "/tmp/slurm-log-tmux-test.json".into(),
+        executable: "slurm-log".into(),
+        sbatch_banks: Vec::new(),
+        clusters: Vec::new(),
+    };
+    assert_eq!(open(&config, &[], 50, false).unwrap(), 0);
+    assert!(
+        reconcile(&config, "session", &[], 50, false)
+            .unwrap_err()
+            .to_string()
+            .contains("at least one log")
+    );
+    let args = split_watcher_args(&config, "session", &job("42", "RUNNING"), 77, true);
+    assert_eq!(
+        &args[..7],
+        [
+            "split-window",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "session"
+        ]
+    );
+    assert!(args.iter().any(|value| value == "--show-log-warnings"));
+    assert!(args.iter().any(|value| value == "77"));
+    assert!(
+        first_watcher_error(b"")
+            .to_string()
+            .contains("respawn failed")
+    );
+    assert!(
+        first_watcher_error(b"broken\n")
+            .to_string()
+            .contains("broken")
+    );
+    assert!(
+        split_watcher_error(b"", 1, 3)
+            .to_string()
+            .contains("split failed")
+    );
+    assert!(
+        split_watcher_error(b"too small", 2, 3)
+            .to_string()
+            .contains("too small")
+    );
 }

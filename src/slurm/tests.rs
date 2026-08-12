@@ -24,6 +24,59 @@ fn arrays_expand_correctly() {
         expand_path("/log/%x_%j_%A_%a.log", "train", "3202710", "3202690", "1"),
         "/log/train_3202710_3202690_1.log"
     );
+    assert_eq!(expand_path("log-%", "job", "42", "42", "0"), "log-%");
+}
+
+#[test]
+fn terminal_metadata_parsers_cover_active_accounting_steps_and_missing_stdout() {
+    let active = active_terminal_metadata(
+        "42",
+        "JobId=42 JobName=train StdOut=/logs/%x-%j.out JobState=RUNNING",
+    );
+    assert_eq!(
+        resolve_terminal_metadata(active),
+        (Some("/logs/train-42.out".into()), "train".into())
+    );
+    let unnamed = active_terminal_metadata("43", "JobId=43 StdOut=/dev/null");
+    assert_eq!(resolve_terminal_metadata(unnamed), (None, "job".into()));
+
+    let accounting = accounting_terminal_metadata(
+        "320_7.batch|320_7.batch|array task|/logs/%A_%a_%j_%%_%q.out\n",
+    )
+    .unwrap();
+    assert_eq!(
+        resolve_terminal_metadata(accounting),
+        (
+            Some("/logs/320_7_320_7_%_%q.out".into()),
+            "array task".into()
+        )
+    );
+    assert!(accounting_terminal_metadata("only|three|fields").is_none());
+}
+
+#[test]
+fn control_details_preserve_fallbacks_and_apply_available_tokens() {
+    let mut job = Job {
+        state: "RUNNING".into(),
+        reason: "Resources".into(),
+        exit_code: "old".into(),
+        partition: "old".into(),
+        ..Job::default()
+    };
+    apply_control_details(
+        &mut job,
+        "JobState=FAILED ExitCode=1:0 Partition=gpu Reason=NodeFail",
+    );
+    assert_eq!(job.state, "FAILED");
+    assert_eq!(job.exit_code, "1:0");
+    assert_eq!(job.partition, "gpu");
+    assert_eq!(job.reason, "NodeFail");
+
+    apply_control_details(&mut job, "JobId=42");
+    assert_eq!(job.state, "FAILED");
+    assert_eq!(job.reason, "NodeFail");
+    assert!(job.exit_code.is_empty());
+    assert!(job.partition.is_empty());
 }
 #[test]
 fn queue_parser_rejects_steps() {
@@ -322,4 +375,20 @@ fn oversized_cache_is_rejected_before_reading() {
     let file = fs::File::create(&path).unwrap();
     file.set_len(MAX_CACHE_BYTES + 1).unwrap();
     assert!(cached_jobs(&path, Duration::from_secs(60)).is_none());
+}
+
+#[test]
+fn cache_lock_creates_parents_and_failed_writes_leave_no_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let nested = directory.path().join("new/cache.json");
+    let lock = query_lock(&nested).unwrap();
+    assert!(nested.with_extension("query.lock").exists());
+    drop(lock);
+
+    let blocked_parent = directory.path().join("blocked");
+    fs::write(&blocked_parent, b"not a directory").unwrap();
+    let blocked = blocked_parent.join("cache.json");
+    store_jobs(&blocked, &[Job::default()]);
+    assert!(!blocked.exists());
+    assert!(query_lock(&blocked).is_err());
 }

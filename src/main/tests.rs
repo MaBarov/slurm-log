@@ -1,4 +1,4 @@
-use super::help_text;
+use super::{help_text, open_pane_job, render_watch};
 
 #[test]
 fn cli_help_is_scannable_and_documents_public_workflows() {
@@ -57,4 +57,14 @@ fn cli_help_hides_internal_worker_commands() {
             "leaked internal command: {internal}"
         );
     }
+}
+
+#[test]
+fn synthetic_open_panes_and_watch_frames_are_renderable() {
+    let job = open_pane_job("cispa".into(), "42".into());
+    assert_eq!(job.cluster, "cispa");
+    assert_eq!(job.id, "42");
+    assert_eq!(job.state, "OPEN");
+
+    render_watch(&[job], &["scheduler temporarily unavailable".into()]);
 }

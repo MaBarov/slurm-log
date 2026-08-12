@@ -196,3 +196,9 @@ include!("daemon/cache.rs");
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "daemon/tests/cache.rs"]
+mod tests_cache;
+#[cfg(test)]
+#[path = "daemon/tests/server.rs"]
+mod tests_server;

@@ -40,43 +40,16 @@ pub fn open(config: &Config, jobs: &[Job], lines: usize, show_log_warnings: bool
     first_watcher.extend(watcher(config, &jobs[0], lines, show_log_warnings));
     let started = tmux(first_watcher)?;
     if !started.status.success() {
-        let reason = String::from_utf8_lossy(&started.stderr).trim().to_string();
         let _ = tmux(["kill-session", "-t", &session]);
-        bail!(
-            "could not start the first log follower: {}",
-            if reason.is_empty() {
-                "tmux respawn failed"
-            } else {
-                &reason
-            }
-        );
+        return Err(first_watcher_error(&started.stderr));
     }
     for job in &jobs[1..] {
-        let mut args = vec![
-            "split-window".into(),
-            "-d".into(),
-            "-P".into(),
-            "-F".into(),
-            "#{pane_id}".into(),
-            "-t".into(),
-            session.clone(),
-        ];
-        args.extend(watcher(config, job, lines, show_log_warnings));
+        let args = split_watcher_args(config, &session, job, lines, show_log_warnings);
         let out = tmux(args)?;
         if !out.status.success() {
-            let reason = String::from_utf8_lossy(&out.stderr).trim().to_string();
             let opened = panes(&session).map_or(1, |panes| panes.len());
             let _ = tmux(["kill-session", "-t", &session]);
-            bail!(
-                "could not open all selected panels (opened {} of {}): {}",
-                opened,
-                jobs.len(),
-                if reason.is_empty() {
-                    "tmux split failed"
-                } else {
-                    &reason
-                }
-            );
+            return Err(split_watcher_error(&out.stderr, opened, jobs.len()));
         }
         label(String::from_utf8_lossy(&out.stdout).trim(), job)?;
         // Redistribute after every split. Without this, tmux keeps halving the
@@ -94,6 +67,52 @@ pub fn open(config: &Config, jobs: &[Job], lines: usize, show_log_warnings: bool
         .status()?
         .code()
         .unwrap_or(1))
+}
+
+fn split_watcher_args(
+    config: &Config,
+    session: &str,
+    job: &Job,
+    lines: usize,
+    show_log_warnings: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "split-window".into(),
+        "-d".into(),
+        "-P".into(),
+        "-F".into(),
+        "#{pane_id}".into(),
+        "-t".into(),
+        session.into(),
+    ];
+    args.extend(watcher(config, job, lines, show_log_warnings));
+    args
+}
+
+fn first_watcher_error(stderr: &[u8]) -> anyhow::Error {
+    let reason = String::from_utf8_lossy(stderr).trim().to_string();
+    anyhow::anyhow!(
+        "could not start the first log follower: {}",
+        if reason.is_empty() {
+            "tmux respawn failed"
+        } else {
+            &reason
+        }
+    )
+}
+
+fn split_watcher_error(stderr: &[u8], opened: usize, total: usize) -> anyhow::Error {
+    let reason = String::from_utf8_lossy(stderr).trim().to_string();
+    anyhow::anyhow!(
+        "could not open all selected panels (opened {} of {}): {}",
+        opened,
+        total,
+        if reason.is_empty() {
+            "tmux split failed"
+        } else {
+            &reason
+        }
+    )
 }
 fn setup(config: &Config, session: &str) -> Result<()> {
     for args in [

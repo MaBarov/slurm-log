@@ -329,4 +329,7 @@ include!("bank/catalog.rs");
 include!("bank/ui.rs");
 
 #[cfg(test)]
+#[path = "bank/tests/edge.rs"]
+mod edge_tests;
+#[cfg(test)]
 mod tests;

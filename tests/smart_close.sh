@@ -2,7 +2,7 @@
 # Offline regression for one-log-pane close detection. No scheduler commands.
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 session=slurm-logs-smart-close-$$
 cleanup() { tmux kill-session -t "$session" >/dev/null 2>&1 || true; }
 trap cleanup EXIT HUP INT TERM

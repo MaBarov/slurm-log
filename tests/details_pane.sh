@@ -4,7 +4,7 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 test_root=$(mktemp -d)
 session=slurm-log-details-test-$$
 case "$test_root" in /tmp/*) ;; *) exit 1 ;; esac
@@ -53,6 +53,23 @@ tmux set-option -p -t "$pane" @slurm_log_job_id 42
 tmux set-option -p -t "$pane" @slurm_log_job_name offline-job
 
 common="--local-user offline --remote-user offline --ssh-host offline.invalid --state-path $test_root/state.json"
+# Plain panes are rejected, and a terminal too small to split reports tmux's
+# bounded reason without damaging the owning log pane.
+plain=$(tmux split-window -d -P -F '#{pane_id}' -t "$pane" 'sleep 120')
+# shellcheck disable=SC2086
+if "$binary" $common toggle-details "$plain" >"$test_root/plain.out" 2>"$test_root/plain.err"; then
+    exit 1
+fi
+grep -F 'focused pane is not a slurm-log job' "$test_root/plain.err" >/dev/null
+tmux kill-pane -t "$plain"
+tmux resize-window -t "$session" -y 2
+# shellcheck disable=SC2086
+if "$binary" $common toggle-details "$pane" >"$test_root/small.out" 2>"$test_root/small.err"; then
+    exit 1
+fi
+grep -F 'could not open the details pane' "$test_root/small.err" >/dev/null
+tmux resize-window -t "$session" -y 20
+
 # Validate the non-interactive information report and warm the private daemon
 # with the exact same fully fake scheduler environment used by the PTY pane.
 text_report=$test_root/details.txt

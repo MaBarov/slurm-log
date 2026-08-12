@@ -4,7 +4,7 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 test_root=$(mktemp -d)
 case "$test_root" in /tmp/*) ;; *) exit 1 ;; esac
 fake_bin=$test_root/bin
@@ -13,6 +13,7 @@ state=$test_root/state/state.json
 config=$test_root/config.json
 calls=$test_root/calls
 mkdir -p "$fake_bin" "$home_dir" "$test_root/state" "$test_root/bank/extra"
+mkdir -p "$test_root/bank-duplicate"
 
 cleanup() {
     env PATH="$fake_bin:/usr/local/bin:/usr/bin:/bin" HOME="$home_dir" \
@@ -31,6 +32,7 @@ cat >"$test_root/bank/extra/eval.sbatch" <<'EOF'
 #!/bin/sh
 #SBATCH --job-name=bank-eval
 EOF
+cp "$test_root/bank/train.sbatch" "$test_root/bank-duplicate/train.sbatch"
 
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
@@ -43,6 +45,7 @@ EOF
 cat >"$fake_bin/sacct" <<'EOF'
 #!/bin/sh
 printf 'sacct %s\n' "$*" >>"$CLI_CALL_LOG"
+case " $* " in *' -j 99999999 '*) exit 0 ;; esac
 printf '301|COMPLETED|alpha-complete|00:03|%s|0:0|1G|cpu=2,mem=2G|cpu\n' "$CLI_NOW"
 printf '302|FAILED|alpha-failed|00:04|%s|1:0|2G|cpu=2,mem=2G|cpu\n' "$CLI_NOW"
 EOF
@@ -98,6 +101,7 @@ EOF
 cat >"$fake_bin/scancel" <<'EOF'
 #!/bin/sh
 printf 'scancel %s\n' "$*" >>"$CLI_CALL_LOG"
+test "${CLI_SCANCEL_FAIL:-0}" = 0
 EOF
 cat >"$fake_bin/sbatch" <<'EOF'
 #!/bin/sh
@@ -113,7 +117,10 @@ cat >"$config" <<EOF
     {"name":"alpha","transport":"local","user":"offline-alpha","workingDirectory":"$test_root","accounting":true},
     {"name":"beta","transport":"ssh","user":"offline-beta","sshHost":"beta.invalid","workingDirectory":"/offline","accounting":true}
   ],
-  "sbatchBanks": [{"path":"$test_root/bank","name":"Fixtures"}],
+  "sbatchBanks": [
+    {"path":"$test_root/bank","name":"Fixtures"},
+    {"path":"$test_root/bank-duplicate","name":"Duplicate"}
+  ],
   "statePath":"$state"
 }
 EOF
@@ -157,6 +164,8 @@ expect_fail cancel 101
 expect_fail cancel --cluster alpha
 expect_fail cancel invalid --cluster alpha
 expect_fail daemon nonsense
+expect_fail toggle-auto
+expect_fail auto-monitor
 
 # Default and named views, including non-TTY rendering and accounting archive.
 "$binary" --me --cluster all >"$test_root/all"
@@ -191,20 +200,31 @@ grep -F '"alpha:101"' "$state" >/dev/null
 grep -F '"dismissed":{"alpha:101"' "$state" >/dev/null
 expect_fail suppress --cluster alpha
 expect_fail suppress invalid --cluster alpha
+expect_fail suppress 101
 
 # Details, configured/temporary banks, submit, and cancellation.
 "$binary" details 101 --cluster alpha >"$test_root/details"
 grep -F 'Job: alpha:101 alpha-run' "$test_root/details" >/dev/null
 grep -F 'Allocation: 1 nodes, 4 CPUs' "$test_root/details" >/dev/null
+SLURM_LOG_DETAILS_PANE=1 TMUX_PANE=%55 "$binary" details 101 --cluster alpha \
+    >"$test_root/details-pane"
+grep -F 'tmux kill-pane -t %55' "$calls" >/dev/null
 "$binary" bank >"$test_root/bank-list"
 grep -F 'Fixtures/train.sbatch' "$test_root/bank-list" >/dev/null
 "$binary" bank --bank-dir "$test_root/bank/extra" >"$test_root/temporary-bank"
 grep -F 'eval.sbatch' "$test_root/temporary-bank" >/dev/null
-"$binary" submit train.sbatch --cluster alpha | grep -F 'alpha:777' >/dev/null
+SLURM_LOG_SBATCH_BANK="$test_root/bank/extra" "$binary" bank >"$test_root/environment-bank"
+grep -F 'eval.sbatch' "$test_root/environment-bank" >/dev/null
+"$binary" submit Fixtures/train.sbatch --cluster alpha | grep -F 'alpha:777' >/dev/null
 cmp "$test_root/bank/train.sbatch" "$test_root/submitted-input"
 "$binary" cancel 101 103 --cluster alpha | grep -F '2 job(s)' >/dev/null
 grep -F 'scancel 101 103' "$calls" >/dev/null
+CLI_SCANCEL_FAIL=1 expect_fail cancel 101 --cluster alpha
 expect_fail submit missing.sbatch --cluster alpha
+
+# An unqualified path shared by multiple named banks is rejected so the user
+# cannot accidentally submit the wrong script.
+expect_fail submit train.sbatch --cluster alpha
 
 # Direct open forms, selection through fzf, newest-job mode, and watcher args.
 : >"$calls"
@@ -215,6 +235,7 @@ grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--pane-follow --lin
 "$binary" 101 --lines 9
 grep -F 'scontrol show job 101' "$calls" >/dev/null
 grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--lines 9' >/dev/null
+expect_fail 99999999
 : >"$calls"
 "$binary" fzf --cluster alpha
 grep -F 'fzf -m' "$calls" >/dev/null

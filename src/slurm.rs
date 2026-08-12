@@ -303,4 +303,7 @@ include!("slurm/aggregate.rs");
 include!("slurm/log_path.rs");
 
 #[cfg(test)]
+#[path = "slurm/tests/aggregate.rs"]
+mod aggregate_tests;
+#[cfg(test)]
 mod tests;

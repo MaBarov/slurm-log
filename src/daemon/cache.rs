@@ -49,34 +49,9 @@ fn start_refresh_loop(config: Config, cache: SharedCache) {
     thread::spawn(move || {
         loop {
             thread::sleep(MEMORY_TTL);
-            let due: Vec<(String, String, bool)> = {
+            let due = {
                 let mut entries = cache.lock().unwrap_or_else(|error| error.into_inner());
-                entries
-                    .iter_mut()
-                    .filter_map(|(key, entry)| {
-                        let archive = key.ends_with("\0true");
-                        let ttl = if archive {
-                            Duration::from_secs(60)
-                        } else {
-                            MEMORY_TTL
-                        };
-                        let active_window = if archive {
-                            Duration::from_secs(70)
-                        } else {
-                            Duration::from_secs(20)
-                        };
-                        if !entry.refreshing
-                            && entry.created.elapsed() >= ttl
-                            && entry.last_access.elapsed() < active_window
-                        {
-                            entry.refreshing = true;
-                            let cluster = key.split('\0').next().unwrap_or("both").to_string();
-                            Some((key.clone(), cluster, archive))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+                mark_due_refreshes(&mut entries)
             };
             for (key, cluster, archive) in due {
                 let config = config.clone();
@@ -87,10 +62,49 @@ fn start_refresh_loop(config: Config, cache: SharedCache) {
     });
 }
 
+fn mark_due_refreshes(entries: &mut HashMap<String, CachedReply>) -> Vec<(String, String, bool)> {
+    entries
+        .iter_mut()
+        .filter_map(|(key, entry)| {
+            let archive = key.ends_with("\0true");
+            let ttl = if archive {
+                Duration::from_secs(60)
+            } else {
+                MEMORY_TTL
+            };
+            let active_window = if archive {
+                Duration::from_secs(70)
+            } else {
+                Duration::from_secs(20)
+            };
+            if !entry.refreshing
+                && entry.created.elapsed() >= ttl
+                && entry.last_access.elapsed() < active_window
+            {
+                entry.refreshing = true;
+                let cluster = key.split('\0').next().unwrap_or("both").to_string();
+                Some((key.clone(), cluster, archive))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn refresh_cached(config: Config, cache: SharedCache, key: String, cluster: String, archive: bool) {
     let result = crate::slurm::all_jobs_direct(&config, &cluster, "all", archive);
     let mut entries = cache.lock().unwrap_or_else(|error| error.into_inner());
-    let Some(entry) = entries.get_mut(&key) else {
+    apply_refresh_result(&mut entries, &key, &cluster, archive, result);
+}
+
+fn apply_refresh_result(
+    entries: &mut HashMap<String, CachedReply>,
+    key: &str,
+    cluster: &str,
+    archive: bool,
+    result: Result<(Vec<Job>, Ledger, Vec<String>)>,
+) {
+    let Some(entry) = entries.get_mut(key) else {
         return;
     };
     entry.refreshing = false;
@@ -104,7 +118,7 @@ fn refresh_cached(config: Config, cache: SharedCache, key: String, cluster: Stri
             details: None,
         });
         entry.created = refreshed_at;
-        invalidate_older_combined(&mut entries, &cluster, archive, refreshed_at);
+        invalidate_older_combined(entries, cluster, archive, refreshed_at);
     }
 }
 

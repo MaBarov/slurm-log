@@ -279,6 +279,20 @@ surface loses coverage or the matrix unexpectedly shrinks. Everything in
 tmux workspace. Performance budgets run against optimized release code to
 avoid debug-build distortion.
 
+For merged source coverage across unit tests and the process-level integration
+suite, install `cargo-llvm-cov` and run:
+
+```bash
+cargo install cargo-llvm-cov --locked
+./coverage.sh
+```
+
+The coverage run builds an instrumented binary in a temporary directory and
+uses only fake scheduler/SSH commands. It enforces at least 95% line coverage
+across the complete production executable, including the TTY, tmux, setup,
+follower, daemon, and process-lifecycle adapters. Override the single gate with
+`SLURM_LOG_COVERAGE_MINIMUM`.
+
 Run the online dependency security gate separately:
 
 ```bash

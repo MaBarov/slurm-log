@@ -379,6 +379,46 @@ mod tests {
     }
 
     #[test]
+    fn defaults_noop_updates_and_read_markers_are_consistent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/state.json");
+        assert_eq!(Ledger::load(&path).unwrap(), Ledger::default());
+
+        Ledger::set_auto_add(&path, false).unwrap();
+        assert!(!path.exists(), "a no-op must not create the ledger");
+        Ledger::set_auto_add(&path, true).unwrap();
+        Ledger::set_auto_add(&path, true).unwrap();
+        assert!(Ledger::load(&path).unwrap().auto_add_default);
+
+        for cluster in ["cispa", "sprint"] {
+            Ledger::mark_opened(
+                &path,
+                &Job {
+                    cluster: cluster.into(),
+                    id: "42".into(),
+                    ..Job::default()
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(Ledger::set_read(&path, "42", false).unwrap(), 2);
+        assert!(Ledger::load(&path).unwrap().opened.is_empty());
+        assert_eq!(Ledger::set_read(&path, "42", true).unwrap(), 2);
+        assert_eq!(Ledger::load(&path).unwrap().opened.len(), 2);
+        assert_eq!(Ledger::set_read(&path, "missing", true).unwrap(), 0);
+    }
+
+    #[test]
+    fn update_rejects_oversized_existing_state_without_replacing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_STATE_BYTES + 1).unwrap();
+        assert!(Ledger::set_auto_add(&path, true).is_err());
+        assert_eq!(fs::metadata(&path).unwrap().len(), MAX_STATE_BYTES + 1);
+    }
+
+    #[test]
     #[ignore = "release-mode performance budget"]
     fn no_op_sync_of_twenty_thousand_jobs_avoids_rewrite_within_budget() {
         let directory = tempfile::tempdir().unwrap();

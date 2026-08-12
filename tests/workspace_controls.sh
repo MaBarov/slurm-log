@@ -4,7 +4,7 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=$project_dir/target/release/slurm-log
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 test_root=$(mktemp -d)
 case "$test_root" in /tmp/*) ;; *) exit 1 ;; esac
 tmux_root=$test_root/tmux
@@ -26,11 +26,18 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 printf 'workspace log\n' >"$test_root/job.log"
+printf 'auto-added log\n' >"$test_root/job-102.log"
+phase=$test_root/queue-phase
+monitor_seen=$test_root/monitor-seen
+printf 'base\n' >"$phase"
 cat >"$fake_bin/scontrol" <<'EOF'
 #!/bin/sh
 case "$*" in
     'show job 101')
         printf 'JobId=101 JobName=workspace-job JobState=RUNNING StdOut=%s/job.log\n' "$WORKSPACE_ROOT"
+        ;;
+    'show job 102')
+        printf 'JobId=102 JobName=auto-start JobState=RUNNING StdOut=%s/job-102.log\n' "$WORKSPACE_ROOT"
         ;;
     *) exit 31 ;;
 esac
@@ -38,6 +45,18 @@ EOF
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
 printf '101|RUNNING|workspace-job|00:01|node|cpu|2026-08-12T10:00:00|100|run.sbatch\n'
+case "$(cat "$WORKSPACE_PHASE")" in
+    pending)
+        printf '102|PENDING|auto-start|00:00|Resources|cpu|Unknown|100|auto.sbatch\n'
+        printf '103|PENDING|early-fail|00:00|Resources|cpu|Unknown|100|fail.sbatch\n'
+        printf '104|PENDING|vanishing|00:00|Resources|cpu|Unknown|100|gone.sbatch\n'
+        : >"$WORKSPACE_MONITOR_SEEN"
+        ;;
+    running)
+        printf '102|RUNNING|auto-start|00:01|node|cpu|2026-08-12T10:01:00|100|auto.sbatch\n'
+        printf '103|FAILED|early-fail|00:00|launch failed|cpu|Unknown|100|fail.sbatch\n'
+        ;;
+esac
 EOF
 cat >"$fake_bin/sacct" <<'EOF'
 #!/bin/sh
@@ -52,6 +71,8 @@ export TMUX_TMPDIR=$tmux_root
 export PATH="$fake_bin:/usr/local/bin:/usr/bin:/bin"
 export HOME=$test_root/home
 export WORKSPACE_ROOT=$test_root
+export WORKSPACE_PHASE=$phase
+export WORKSPACE_MONITOR_SEEN=$monitor_seen
 export SLURM_LOG_CONFIG=$config
 export SLURM_LOG_STATE=$state
 
@@ -127,14 +148,37 @@ printf '%s\n' "$root_toast" | grep -F 1500 >/dev/null
 # Auto-add changes both workspace and persistent defaults, and starts one
 # monitor process. Toggling it back off is observable immediately.
 test "$(tmux_test show-options -v -t "$session" @slurm_log_auto_add)" = off
+printf 'pending\n' >"$phase"
 "$binary" toggle-auto "$session"
 test "$(tmux_test show-options -v -t "$session" @slurm_log_auto_add)" = on
 grep -F '"autoAddDefault":true' "$state" >/dev/null
 monitor=$(tmux_test show-options -v -t "$session" @slurm_log_monitor_pid)
 case "$monitor" in ''|*[!0-9]*) exit 1 ;; esac
+attempt=0
+while ! test -f "$monitor_seen"; do
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 300 || { printf 'auto monitor did not take its initial snapshot\n' >&2; exit 1; }
+    sleep 0.01
+done
+printf 'running\n' >"$phase"
+attempt=0
+while ! tmux_test list-panes -t "$session" \
+    -F '#{@slurm_log_cluster}:#{@slurm_log_job_id}' | grep -Fx 'alpha:102' >/dev/null; do
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 700 || { printf 'auto monitor did not add the started job\n' >&2; exit 1; }
+    sleep 0.01
+done
+# A second scheduler frame confirms that pending job 104 vanished. The monitor
+# then observes the disabled option and exits normally, preserving coverage.
+sleep 3.2
 "$binary" toggle-auto "$session"
 test "$(tmux_test show-options -v -t "$session" @slurm_log_auto_add)" = off
 grep -F '"autoAddDefault":false' "$state" >/dev/null
+sleep 3.2
+auto_pane=$(tmux_test list-panes -t "$session" \
+    -F '#{pane_id}|#{@slurm_log_job_id}' | sed -n 's/|102$//p')
+test -n "$auto_pane"
+tmux_test kill-pane -t "$auto_pane"
 
 # With one log pane, execute the same if-shell branches installed for Ctrl-b q;
 # tmux send-keys writes into the PTY and intentionally does not emulate a

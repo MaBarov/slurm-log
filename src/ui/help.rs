@@ -118,56 +118,9 @@ fn draw_popup(
         .take(available)
         .enumerate()
     {
-        frame[screen_row + 3] = if let Some(index) = row.job {
-            let job = &jobs[index];
-            let text = format!(
-                "{}{}{}  {:<7} {:<15} {:<19} {:<11} {}",
-                if row_index == focus { ">" } else { " " },
-                if selected.contains(&job.key()) {
-                    "*"
-                } else {
-                    " "
-                },
-                if row.nested { "  " } else { "" },
-                job.cluster,
-                job.id,
-                job.state,
-                job.elapsed,
-                display_name(job)
-            );
-            let color = if job.running() {
-                32
-            } else if job.pending() {
-                33
-            } else if job.state.starts_with("COMPLETED") {
-                36
-            } else {
-                31
-            };
-            popup_styled(
-                fit_popup_line(&text, width),
-                Some(color),
-                row_index == focus,
-            )
-        } else {
-            let chosen = row
-                .members
-                .iter()
-                .all(|&i| selected.contains(&jobs[i].key()));
-            popup_styled(
-                fit_popup_line(&group_row_text(row, chosen, row_index == focus), width),
-                Some(90),
-                row_index == focus,
-            )
-        };
+        frame[screen_row + 3] = popup_row(jobs, row, row_index, focus, selected, width);
     }
-    let warning = if warnings.is_empty() {
-        String::new()
-    } else if show_warnings {
-        format!(" | {}", warnings.join("; "))
-    } else {
-        format!(" | ⚠ {} warning(s) — press w", warnings.len())
-    };
+    let warning = popup_warning(warnings, show_warnings);
     if height > 0 {
         frame[height as usize - 1] = popup_styled(
             fit_popup_line(
@@ -205,6 +158,60 @@ fn draw_popup(
     stdout.flush()?;
     *previous = frame;
     Ok(())
+}
+
+fn popup_row(
+    jobs: &[Job],
+    row: &Row,
+    row_index: usize,
+    focus: usize,
+    selected: &HashSet<String>,
+    width: u16,
+) -> String {
+    if let Some(index) = row.job {
+        let job = &jobs[index];
+        let text = format!(
+            "{}{}{}  {:<7} {:<15} {:<19} {:<11} {}",
+            if row_index == focus { ">" } else { " " },
+            if selected.contains(&job.key()) { "*" } else { " " },
+            if row.nested { "  " } else { "" },
+            job.cluster,
+            job.id,
+            job.state,
+            job.elapsed,
+            display_name(job)
+        );
+        let color = if job.running() {
+            32
+        } else if job.pending() {
+            33
+        } else if job.state.starts_with("COMPLETED") {
+            36
+        } else {
+            31
+        };
+        popup_styled(fit_popup_line(&text, width), Some(color), row_index == focus)
+    } else {
+        let chosen = row
+            .members
+            .iter()
+            .all(|&index| selected.contains(&jobs[index].key()));
+        popup_styled(
+            fit_popup_line(&group_row_text(row, chosen, row_index == focus), width),
+            Some(90),
+            row_index == focus,
+        )
+    }
+}
+
+fn popup_warning(warnings: &[String], show: bool) -> String {
+    if warnings.is_empty() {
+        String::new()
+    } else if show {
+        format!(" | {}", warnings.join("; "))
+    } else {
+        format!(" | ⚠ {} warning(s) — press w", warnings.len())
+    }
 }
 
 fn fit_popup_line(text: &str, width: u16) -> String {
@@ -272,6 +279,22 @@ fn header_lines(
 
 fn confirm_cancel(jobs: &[Job]) -> Result<bool> {
     let (_, height) = terminal::size()?;
+    let out = cancel_frame(jobs, height)?;
+    io::stdout().write_all(&out)?;
+    io::stdout().flush()?;
+    loop {
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if let Some(choice) = cancel_confirmation_choice(key.code) {
+                    return Ok(choice);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn cancel_frame(jobs: &[Job], height: u16) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     execute!(
         out,
@@ -300,18 +323,7 @@ fn confirm_cancel(jobs: &[Job]) -> Result<bool> {
         )?;
     }
     execute!(out, Print("\r\nPress y to request scancel · n/Esc returns"))?;
-    io::stdout().write_all(&out)?;
-    io::stdout().flush()?;
-    loop {
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if let Some(choice) = cancel_confirmation_choice(key.code) {
-                    return Ok(choice);
-                }
-            }
-            _ => {}
-        }
-    }
+    Ok(out)
 }
 
 fn cancel_confirmation_choice(code: KeyCode) -> Option<bool> {

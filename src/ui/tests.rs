@@ -82,6 +82,56 @@ fn popup_styles_keep_color_and_focus_in_one_incremental_line() {
 }
 
 #[test]
+fn popup_rows_cover_every_state_group_selection_and_warning_mode() {
+    let jobs: Vec<_> = ["RUNNING", "PENDING", "COMPLETED", "FAILED"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, state)| Job {
+            cluster: "alpha".into(),
+            id: index.to_string(),
+            name: format!("job-{index}"),
+            state: state.into(),
+            ..Job::default()
+        })
+        .collect();
+    let selected: HashSet<_> = jobs.iter().map(Job::key).collect();
+    for (index, color) in [32, 33, 36, 31].into_iter().enumerate() {
+        let row = Row {
+            name: jobs[index].name.clone(),
+            job: Some(index),
+            members: vec![index],
+            nested: index == 1,
+            expanded: false,
+        };
+        let rendered = popup_row(&jobs, &row, index, index, &selected, 100);
+        assert!(rendered.contains(&format!("\x1b[{color}m")));
+        assert!(rendered.contains('*'));
+    }
+    let group = Row {
+        name: "group".into(),
+        job: None,
+        members: vec![0, 1],
+        nested: false,
+        expanded: false,
+    };
+    assert!(popup_row(&jobs, &group, 0, 0, &selected, 80).contains("2 runs"));
+    assert_eq!(popup_warning(&[], false), "");
+    assert!(popup_warning(&["one".into(), "two".into()], false).contains("2 warning"));
+    assert_eq!(popup_warning(&["one".into()], true), " | one");
+}
+
+#[test]
+fn cancellation_frame_lists_jobs_and_bounds_overflow() {
+    let jobs: Vec<_> = (0..5).map(|id| job(&id.to_string(), "training")).collect();
+    let short = String::from_utf8(cancel_frame(&jobs, 20).unwrap()).unwrap();
+    assert!(short.contains("STOP 5 ACTIVE JOB(S)?"));
+    assert!(!short.contains("… and"));
+    let bounded = String::from_utf8(cancel_frame(&jobs, 7).unwrap()).unwrap();
+    assert!(bounded.contains("… and 3 more"));
+    assert!(bounded.contains("Press y to request scancel"));
+}
+
+#[test]
 fn compact_rows_overwrite_the_width_without_clear_sequences() {
     assert_eq!(fit_popup_line("job", 6), "job   ");
     assert_eq!(fit_popup_line("archive", 4), "arch");
@@ -114,6 +164,42 @@ fn field_search_is_case_insensitive_without_joining_fields() {
     assert!(job_matches(&value, "mixedcase"));
     assert!(job_matches(&value, "gpu-long"));
     assert!(!job_matches(&value, "not-present"));
+}
+
+#[test]
+fn row_helpers_cover_status_order_ids_unicode_and_selection() {
+    let with_state = |state: &str| Job {
+        state: state.into(),
+        ..Job::default()
+    };
+    assert_eq!(status_rank(&with_state("RUNNING")), 0);
+    assert_eq!(status_rank(&with_state("PENDING")), 1);
+    assert_eq!(status_rank(&with_state("COMPLETED")), 2);
+    assert_eq!(status_rank(&with_state("FAILED")), 3);
+    assert_eq!(status_rank(&with_state("CANCELLED")), 4);
+    assert_eq!(job_number("320_7"), 320);
+    assert_eq!(job_number("not-a-number"), 0);
+    assert_eq!(job_number(""), 0);
+
+    let unicode = job("7", "Überprüfung");
+    assert!(job_matches(&unicode, "über"));
+    assert!(job_matches(&unicode, ""));
+
+    let jobs = vec![job("1", "a"), job("2", "b")];
+    let mut selected = HashSet::new();
+    toggle(&mut selected, &jobs, &[0, 1]);
+    assert_eq!(selected.len(), 2);
+    toggle(&mut selected, &jobs, &[0, 1]);
+    assert!(selected.is_empty());
+}
+
+#[test]
+fn cluster_cycle_handles_single_cluster_unknown_names_and_reverse_wrap() {
+    let mut config = multi_cluster_config();
+    assert_eq!(cycle_cluster(&config, "unknown", false), "sprint");
+    assert_eq!(cycle_cluster(&config, "all", true), "cispa");
+    config.clusters.truncate(1);
+    assert_eq!(cycle_cluster(&config, "anything", false), "sprint");
 }
 
 #[test]
@@ -181,6 +267,11 @@ fn group_rows_are_quiet_and_do_not_use_the_old_group_badge() {
     let text = group_row_text(&row, false, false);
     assert_eq!(text, "    ▾    3 runs  ·  training");
     assert!(!text.contains("GROUP"));
+}
+
+#[test]
+fn plain_popup_text_needs_no_terminal_reset_sequence() {
+    assert_eq!(popup_styled("plain".into(), None, false), "plain");
 }
 
 #[test]

@@ -2,14 +2,10 @@ pub fn terminal_path(config: &Config, cluster: &str, id: &str) -> Result<(Option
     if !valid_job_id(id) {
         bail!("invalid job ID {id}");
     }
-    let (raw, logical, name, template) = if let Ok(value) =
+    let metadata = if let Ok(value) =
         scheduler_text(config, cluster, "scontrol", &["show", "job", id])
     {
-        let name = token(&value, "JobName=").unwrap_or("job").to_string();
-        let path = usable_stdout(token(&value, "StdOut="))
-            .unwrap_or_default()
-            .to_string();
-        (id.to_string(), id.to_string(), name, path)
+        active_terminal_metadata(id, &value)
     } else {
         if !config.cluster(cluster)?.accounting {
             bail!("job {cluster}:{id} is no longer active and accounting is unavailable");
@@ -19,23 +15,42 @@ pub fn terminal_path(config: &Config, cluster: &str, id: &str) -> Result<(Option
             shell_quote(id)
         );
         let value = scheduler_text(config, cluster, "sh", &["-c", &command])?;
-        let fields: Vec<_> = value.trim().splitn(4, '|').collect();
-        if fields.len() != 4 {
-            bail!("no stdout for {cluster} job {id}");
-        }
+        accounting_terminal_metadata(&value)
+            .ok_or_else(|| anyhow::anyhow!("no stdout for {cluster} job {id}"))?
+    };
+    Ok(resolve_terminal_metadata(metadata))
+}
+
+type TerminalMetadata = (String, String, String, String);
+
+fn active_terminal_metadata(id: &str, value: &str) -> TerminalMetadata {
+    let name = token(value, "JobName=").unwrap_or("job").to_string();
+    let path = usable_stdout(token(value, "StdOut="))
+        .unwrap_or_default()
+        .to_string();
+    (id.to_string(), id.to_string(), name, path)
+}
+
+fn accounting_terminal_metadata(value: &str) -> Option<TerminalMetadata> {
+    let fields: Vec<_> = value.trim().splitn(4, '|').collect();
+    (fields.len() == 4).then(|| {
         (
             fields[0].into(),
             fields[1].into(),
             fields[2].into(),
             fields[3].into(),
         )
-    };
+    })
+}
+
+fn resolve_terminal_metadata(metadata: TerminalMetadata) -> (Option<String>, String) {
+    let (raw, logical, name, template) = metadata;
     let logical = logical.split('.').next().unwrap_or(&logical);
     let (master, task) = logical.split_once('_').unwrap_or((logical, "4294967294"));
     if usable_stdout(Some(&template)).is_none() {
-        return Ok((None, name));
+        return (None, name);
     }
-    Ok((
+    (
         Some(expand_path(
             &template,
             &name,
@@ -44,7 +59,7 @@ pub fn terminal_path(config: &Config, cluster: &str, id: &str) -> Result<(Option
             task,
         )),
         name,
-    ))
+    )
 }
 
 fn usable_stdout(value: Option<&str>) -> Option<&str> {
@@ -77,12 +92,16 @@ pub fn final_details(config: &Config, job: &Job) -> Job {
     }
     let mut details = job.clone();
     if let Ok(value) = scheduler_text(config, &job.cluster, "scontrol", &["show", "job", &job.id]) {
-        details.state = token(&value, "JobState=").unwrap_or(&details.state).into();
-        details.exit_code = token(&value, "ExitCode=").unwrap_or("").into();
-        details.partition = token(&value, "Partition=").unwrap_or("").into();
-        details.reason = token(&value, "Reason=").unwrap_or(&details.reason).into();
+        apply_control_details(&mut details, &value);
     }
     details
+}
+
+fn apply_control_details(details: &mut Job, value: &str) {
+    details.state = token(value, "JobState=").unwrap_or(&details.state).into();
+    details.exit_code = token(value, "ExitCode=").unwrap_or("").into();
+    details.partition = token(value, "Partition=").unwrap_or("").into();
+    details.reason = token(value, "Reason=").unwrap_or(&details.reason).into();
 }
 
 fn token<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {

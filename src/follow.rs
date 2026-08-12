@@ -110,16 +110,37 @@ pub fn run(
     let display = thread::spawn(move || display_log(output, show_log_warnings));
     let interrupted = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, interrupted.clone())?;
+    supervise_follower(
+        config,
+        job,
+        pane,
+        child,
+        display,
+        interrupted,
+        FOLLOWER_SCHEDULER_POLL_INTERVAL,
+        || slurm::queued(config, &job.cluster),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn supervise_follower(
+    config: &Config,
+    job: &Job,
+    pane: bool,
+    mut child: std::process::Child,
+    display: thread::JoinHandle<()>,
+    interrupted: Arc<AtomicBool>,
+    scheduler_interval: Duration,
+    mut queued: impl FnMut() -> Result<Vec<Job>>,
+) -> Result<i32> {
     let mut absent = 0;
-    let mut next_scheduler_poll = Instant::now() + FOLLOWER_SCHEDULER_POLL_INTERVAL;
+    let mut next_scheduler_poll = Instant::now() + scheduler_interval;
     loop {
         if interrupted.load(Ordering::Relaxed) {
             let _ = child.kill();
             if pane && let Ok(pane_id) = env::var("TMUX_PANE") {
                 crate::tmux::close_details_for_parent(&pane_id);
-                let _ = Command::new("tmux")
-                    .args(["kill-pane", "-t", &pane_id])
-                    .status();
+                defer_pane_close(&pane_id);
             }
             return Ok(130);
         }
@@ -128,35 +149,9 @@ pub fn run(
             let code = status.code().unwrap_or(-15);
             if pane {
                 let details = slurm::final_details(config, job);
-                let final_state = &details.state;
                 let still_active = slurm::queued(config, &job.cluster)
                     .is_ok_and(|jobs| jobs.iter().any(|item| item.id == job.id && item.active()));
-                let message = if [
-                    "FAILED",
-                    "TIMEOUT",
-                    "OUT_OF_MEMORY",
-                    "NODE_FAIL",
-                    "CANCELLED",
-                ]
-                .iter()
-                .any(|state| final_state.starts_with(state))
-                {
-                    let insight = details.insight();
-                    format!(
-                        "Job {} failed: {}{}",
-                        job.id,
-                        final_state,
-                        if insight.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" ({insight})")
-                        }
-                    )
-                } else if still_active {
-                    format!("Job {} log follower stopped (status {code})", job.id)
-                } else {
-                    format!("Job {} finished", job.id)
-                };
+                let message = completion_message(job, &details, still_active, code);
                 alert(&message);
                 println!(
                     "\n[slurm-log] Follower stopped with status {code}. Press Enter to close this pane."
@@ -164,9 +159,7 @@ pub fn run(
                 wait_for_enter();
                 if let Ok(pane_id) = env::var("TMUX_PANE") {
                     crate::tmux::close_details_for_parent(&pane_id);
-                    let _ = Command::new("tmux")
-                        .args(["kill-pane", "-t", &pane_id])
-                        .status();
+                    defer_pane_close(&pane_id);
                 }
             }
             return Ok(code);
@@ -176,21 +169,52 @@ pub fn run(
             thread::sleep(FOLLOWER_EXIT_POLL_INTERVAL.min(next_scheduler_poll - now));
             continue;
         }
-        next_scheduler_poll = now + FOLLOWER_SCHEDULER_POLL_INTERVAL;
-        match slurm::queued(config, &job.cluster) {
+        next_scheduler_poll = now + scheduler_interval;
+        match queued() {
             Ok(jobs) => {
-                let current = jobs.iter().find(|item| item.id == job.id);
-                if job.pending() && current.is_some_and(Job::running) {
+                let (next_absent, started, stop) = observe_queue(job, &jobs, absent);
+                absent = next_absent;
+                if started {
                     alert(&format!("Job {} started", job.id));
                 }
-                absent = if current.is_none() { absent + 1 } else { 0 };
-                if absent >= 2 {
+                if stop {
                     let _ = child.kill();
                 }
             }
             Err(_) => absent = 0,
         }
     }
+}
+
+fn completion_message(job: &Job, details: &Job, still_active: bool, code: i32) -> String {
+    if details.failed() {
+        let insight = details.insight();
+        format!(
+            "Job {} failed: {}{}",
+            job.id,
+            details.state,
+            if insight.is_empty() {
+                String::new()
+            } else {
+                format!(" ({insight})")
+            }
+        )
+    } else if still_active {
+        format!("Job {} log follower stopped (status {code})", job.id)
+    } else {
+        format!("Job {} finished", job.id)
+    }
+}
+
+fn observe_queue(job: &Job, jobs: &[Job], absent: u8) -> (u8, bool, bool) {
+    let current = jobs.iter().find(|item| item.id == job.id);
+    let started = job.pending() && current.is_some_and(Job::running);
+    let absent = if current.is_none() {
+        absent.saturating_add(1)
+    } else {
+        0
+    };
+    (absent, started, absent >= 2)
 }
 
 fn run_interactive_monitor(
@@ -218,17 +242,12 @@ fn run_interactive_monitor(
     loop {
         if Instant::now() >= refresh_at {
             refresh_at = Instant::now() + Duration::from_secs(3);
-            match slurm::all_jobs(config, &job.cluster, "all", false) {
-                Ok((jobs, _, _)) => {
-                    if let Some(found) = jobs.into_iter().find(|item| item.id == job.id) {
-                        current = found;
-                        missing = 0;
-                    } else {
-                        missing = missing.saturating_add(1);
-                    }
-                }
-                Err(_) => missing = 0,
-            }
+            apply_monitor_snapshot(
+                &mut current,
+                &job.id,
+                &mut missing,
+                slurm::all_jobs(config, &job.cluster, "all", false),
+            );
 
             // A freshly returned sbatch ID may briefly be absent from
             // scontrol. As soon as Slurm publishes its stdout path, replace
@@ -281,10 +300,18 @@ include!("follow/monitor_frame.rs");
 fn close_monitor_pane(pane: bool) {
     if pane && let Ok(pane_id) = env::var("TMUX_PANE") {
         crate::tmux::close_details_for_parent(&pane_id);
-        let _ = Command::new("tmux")
-            .args(["kill-pane", "-t", &pane_id])
-            .status();
+        defer_pane_close(&pane_id);
     }
+}
+
+fn defer_pane_close(pane: &str) {
+    // Killing the pane synchronously terminates this process before normal
+    // destructors, buffered output, and coverage profiles can be flushed.
+    // Let tmux perform the visual close immediately after the follower exits.
+    let command = format!("sleep 0.05; tmux kill-pane -t {}", shell_quote(pane));
+    let _ = Command::new("tmux")
+        .args(["run-shell", "-b", &command])
+        .status();
 }
 
 fn wait_for_enter() {
@@ -311,15 +338,38 @@ fn wait_for_enter() {
     // Open the controlling terminal afresh: the follower child deliberately
     // has no stdin. This is the fallback for unusual non-Crossterm terminals.
     if let Ok(tty) = std::fs::File::open("/dev/tty") {
-        let mut input = BufReader::new(tty);
-        let mut byte = [0_u8; 1];
-        while input.read_exact(&mut byte).is_ok() {
-            if enter_byte(byte[0]) {
-                return;
-            }
-        }
+        read_until_enter(tty);
     } else {
         let _ = io::stdin().read_line(&mut String::new());
+    }
+}
+
+fn read_until_enter(reader: impl Read) {
+    let mut input = BufReader::new(reader);
+    let mut byte = [0_u8; 1];
+    while input.read_exact(&mut byte).is_ok() {
+        if enter_byte(byte[0]) {
+            return;
+        }
+    }
+}
+
+fn apply_monitor_snapshot(
+    current: &mut Job,
+    job_id: &str,
+    missing: &mut u8,
+    snapshot: Result<(Vec<Job>, crate::state::Ledger, Vec<String>)>,
+) {
+    match snapshot {
+        Ok((jobs, _, _)) => {
+            if let Some(found) = jobs.into_iter().find(|item| item.id == job_id) {
+                *current = found;
+                *missing = 0;
+            } else {
+                *missing = missing.saturating_add(1);
+            }
+        }
+        Err(_) => *missing = 0,
     }
 }
 
