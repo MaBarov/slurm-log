@@ -419,7 +419,11 @@ fn run() -> Result<()> {
             return Ok(());
         }
         tmux::open(&config, &chosen.jobs, args.lines, chosen.show_log_warnings)?;
-        return Ok(());
+        // Keep the original picker alive behind the dedicated log workspace.
+        // Inside tmux it redraws while its pane is inactive; outside tmux the
+        // attach call blocks until the workspace closes. In both cases,
+        // Ctrl-b q returns the user to a fresh job list instead of the shell.
+        continue;
     }
 }
 

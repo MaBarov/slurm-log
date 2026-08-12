@@ -78,6 +78,7 @@ workspace.auto_add_A	workspace_controls.sh
 workspace.close_pane_x	workspace_controls.sh
 workspace.zoom_z	workspace_controls.sh
 workspace.smart_close_q	workspace_controls.sh
+workspace.return_to_picker	picker_controls.sh
 workspace.status_identity	focus_toast.sh
 workspace.enter_close_terminal	pane_close.sh
 workspace.mouse_selection_copy	workspace_controls.sh

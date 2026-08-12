@@ -317,19 +317,19 @@ while :; do
     }
     sleep 0.01
 done
-# Let the picker process return normally after switch-client so destructors and
-# instrumented profiles are flushed before the private tmux server is removed.
+# The original picker remains alive and pre-renders a fresh list behind the
+# workspace. Closing that workspace therefore returns to the list, not a shell.
+wait_text "$open_session" 'Cluster [ ALL ]'
+tmux_test kill-session -t "$workspace"
+tmux_test has-session -t "$open_session"
+wait_text "$open_session" grouped
+
+# Exit the returned picker normally so destructors and instrumented profiles
+# flush before the private tmux server is removed.
+tmux_test send-keys -t "$open_session" q
 attempt=0
-while tmux_test has-session -t "$open_session" 2>/dev/null \
-    && test "$(tmux_test display-message -p -t "$open_session" '#{pane_dead}')" != 1; do
-    attempt=$((attempt + 1))
-    test "$attempt" -lt 500 || {
-        tmux_test list-panes -t "$open_session" \
-            -F 'dead=#{pane_dead} status=#{pane_dead_status} command=#{pane_current_command} start=#{pane_start_command}' >&2 || true
-        printf 'picker did not exit after opening workspace\n' >&2
-        exit 1
-    }
-    sleep 0.01
+while tmux_test has-session -t "$open_session" 2>/dev/null; do
+    attempt=$((attempt + 1)); test "$attempt" -lt 300; sleep 0.01
 done
 
 printf 'picker_controls: ok (all documented picker keys + exact group open; fully offline)\n'
