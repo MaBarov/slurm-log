@@ -128,21 +128,25 @@
                 popup_frame.clear();
             }
             KeyCode::Char('x') if !rows.is_empty() => {
-                let targets: Vec<Job> = if selected.is_empty() {
-                    rows[focus]
-                        .members
-                        .iter()
-                        .map(|&index| jobs[index].clone())
-                        .filter(Job::active)
-                        .collect()
-                } else {
-                    jobs.iter()
-                        .filter(|job| selected.contains(&job.key()) && job.active())
-                        .cloned()
-                        .collect()
-                };
+                // Stopping is deliberately cursor-scoped. Space marks are a
+                // pane-opening selection and must never broaden a destructive
+                // scheduler action. A collapsed group has no single focused
+                // job, so require the user to expand it first.
+                let targets: Vec<Job> = rows[focus]
+                    .job
+                    .into_iter()
+                    .map(|index| jobs[index].clone())
+                    .filter(Job::active)
+                    .collect();
                 if targets.is_empty() {
-                    set_notice(&mut notice, "No active jobs selected");
+                    set_notice(
+                        &mut notice,
+                        if rows[focus].job.is_none() {
+                            "Expand the group and focus one job to stop it"
+                        } else {
+                            "Focused job is not active"
+                        },
+                    );
                     popup_frame.clear();
                 } else if confirm_cancel(&targets)? {
                     let requested = targets.len();
@@ -170,7 +174,6 @@
                         );
                         view_dirty = true;
                     }
-                    selected.clear();
                     popup_frame.clear();
                 }
             }

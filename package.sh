@@ -1,5 +1,5 @@
 #!/bin/sh
-# Creates a source + native binary archive suitable for sending to colleagues.
+# Creates a portable source + native binary release archive.
 # Usage: ./package.sh [OUTPUT.tar.gz]
 
 set -eu
@@ -17,6 +17,16 @@ else
     cargo build --locked --release --manifest-path "$script_dir/Cargo.toml"
     release_binary=$script_dir/target/release/slurm-log
 fi
+# Coverage and package tests may supply their freshly instrumented binary. The
+# Cargo check above still runs, so ordinary packages cannot silently reuse a
+# stale artifact.
+if [ -n "${SLURM_LOG_PACKAGE_BINARY:-}" ]; then
+    release_binary=$SLURM_LOG_PACKAGE_BINARY
+fi
+[ -f "$release_binary" ] && [ -x "$release_binary" ] && [ ! -L "$release_binary" ] || {
+    printf 'Release binary is missing or unsafe: %s\n' "$release_binary" >&2
+    exit 1
+}
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 mkdir -p "$tmp_dir/slurm-log/bin"

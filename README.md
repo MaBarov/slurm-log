@@ -158,8 +158,11 @@ The legacy singular `sbatchBank` setting is still accepted. A unique script can
 be submitted by relative path; if multiple banks contain that path, prefix it
 with `BANK/`.
 
-Press `x` to stop the focused or selected active jobs. The confirmation lists
-every affected job before issuing one owner-authorized `scancel` per cluster.
+Press `x` to stop only the focused active job. Space-marked jobs are ignored,
+so a pane-opening selection cannot accidentally broaden a cancellation. A
+collapsed group must be expanded before one of its jobs can be stopped. The
+confirmation names the affected job before issuing its owner-authorized
+`scancel`.
 
 Environment variables override the file when needed:
 

@@ -12,7 +12,7 @@ fn help_lines() -> &'static [&'static str] {
         "  c                 Clear the selection",
         "  Enter             Open selection; otherwise open the focused job/group",
         "  d                 Dismiss selected finished jobs (active jobs stay visible)",
-        "  x                 Stop focused/selected active jobs after confirmation",
+        "  x                 Stop only the focused active job after confirmation",
         "  s                 Open the recursive sbatch script bank",
         "",
         "VIEWS & FILTERS",

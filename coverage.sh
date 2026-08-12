@@ -24,7 +24,7 @@ printf '%s\n' '==> instrumented release binary'
 cargo build --locked --release --manifest-path "$project_dir/Cargo.toml" --quiet
 binary=$CARGO_TARGET_DIR/release/slurm-log
 
-for name in offline_hostile follower_paths pane_close interactive_pane details_pane details_direct \
+for name in package_smoke offline_hostile follower_paths pane_close interactive_pane details_pane details_direct \
     focus_toast cli_surface picker_controls daemon_integration \
     workspace_controls reconcile_paths bank_actions bank_ui cluster_tabs degraded_clusters \
     smart_close setup_wizard; do

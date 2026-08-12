@@ -140,11 +140,12 @@ fn private_temp_dir() -> Result<PrivateTempDir> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
+    private_temp_dir_in(&base, nonce, std::process::id())
+}
+
+fn private_temp_dir_in(base: &Path, nonce: u128, process_id: u32) -> Result<PrivateTempDir> {
     for attempt in 0..8 {
-        let path = base.join(format!(
-            "slurm-log-update-{}-{nonce}-{attempt}",
-            std::process::id()
-        ));
+        let path = base.join(format!("slurm-log-update-{}-{nonce}-{attempt}", process_id));
         match fs::create_dir(&path) {
             Ok(()) => {
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
@@ -306,27 +307,37 @@ fn atomic_replace(candidate: &Path, target: &Path) -> Result<()> {
     let parent = target
         .parent()
         .ok_or_else(|| anyhow::anyhow!("installed executable has no parent directory"))?;
-    let temporary = parent.join(format!(".slurm-log.update.{}", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(".slurm-log.update.{}.{nonce}", std::process::id()));
+    atomic_replace_at(candidate, target, &temporary)
+}
+
+fn atomic_replace_at(candidate: &Path, target: &Path, temporary: &Path) -> Result<()> {
+    let mut created = false;
     let result = (|| -> Result<()> {
         let input = fs::File::open(candidate).context("open release binary")?;
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o755)
-            .open(&temporary)
+            .open(temporary)
             .context("create atomic update file")?;
+        created = true;
         let copied = std::io::copy(&mut input.take(MAX_RELEASE_BYTES + 1), &mut output)?;
         if copied == 0 || copied > MAX_RELEASE_BYTES {
             bail!("release binary has an unsafe size");
         }
         output.flush()?;
         output.sync_all()?;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
-        fs::rename(&temporary, target).context("atomically install release binary")?;
+        fs::set_permissions(temporary, fs::Permissions::from_mode(0o755))?;
+        fs::rename(temporary, target).context("atomically install release binary")?;
         Ok(())
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+    if result.is_err() && created {
+        let _ = fs::remove_file(temporary);
     }
     result
 }

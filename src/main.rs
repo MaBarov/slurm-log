@@ -219,7 +219,7 @@ OPTIONS
 PICKER ESSENTIALS
   Up/Down or j/k              Move                 Space  Select
   Enter                       Open selection       Tab    Switch cluster
-  s                           Open sbatch bank     x      Stop selected jobs
+  s                           Open sbatch bank     x      Stop focused job
   /                           Search               b      Show blocked jobs
   d                           Dismiss finished     q      Quit
   ?                           Show the complete keyboard reference

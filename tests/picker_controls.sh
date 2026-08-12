@@ -201,10 +201,30 @@ while screen "$main_session" | grep -E '[[:space:]]50[01][[:space:]]' >/dev/null
 done
 tmux_test send-keys -t "$main_session" Space
 wait_text "$main_session" '2 selected'
+tmux_test send-keys -t "$main_session" x
+wait_text "$main_session" 'Expand the group and focus one job to stop it'
+test ! -f "$calls" || ! grep -F scancel "$calls" >/dev/null
+wait_text "$main_session" '2 selected'
 tmux_test send-keys -t "$main_session" c
 wait_text "$main_session" '0 selected'
 tmux_test send-keys -t "$main_session" v
 wait_text "$main_session" '2 selected'
+tmux_test send-keys -t "$main_session" c Escape
+wait_text "$main_session" 'job-499'
+
+# A Space mark is only an open/manage selection. Stopping remains scoped to
+# the focused concrete row and preserves unrelated marks.
+tmux_test send-keys -t "$main_session" / job-499 Enter Space
+wait_text "$main_session" '1 selected'
+tmux_test send-keys -t "$main_session" Escape
+wait_text "$main_session" 'job-498'
+tmux_test send-keys -t "$main_session" / job-498 Enter x
+wait_text "$main_session" 'STOP 1 ACTIVE JOB(S)?'
+tmux_test send-keys -t "$main_session" y
+wait_text "$main_session" 'Stop requested for 1 job(s)'
+grep -F 'scancel 498' "$calls" >/dev/null
+! grep -F 'scancel 499' "$calls" >/dev/null
+wait_text "$main_session" '1 selected'
 tmux_test send-keys -t "$main_session" c Escape
 wait_text "$main_session" 'job-499'
 
