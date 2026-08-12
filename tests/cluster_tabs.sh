@@ -190,9 +190,9 @@ tmux send-keys -t "$main_session" q
 
 # Ctrl-b j uses the compact popup renderer. Cycle backwards from ALL, then
 # forwards through ALL to alpha, checking that old colored rows are erased.
-# The tagged beta pane is dependency-blocked, so the ordinary live filter hides
-# it. Because it is already open, Ctrl-b j must retain its real PENDING metadata
-# (and orange color) instead of replacing it with a red OPEN placeholder.
+# The tagged beta pane is dependency-blocked. It remains selected as an open
+# pane but stays out of the ordinary live list until blocked jobs are shown.
+# When revealed, it must retain real PENDING metadata instead of becoming OPEN.
 tag_cluster=beta
 tag_job=999
 start_picker "$popup_session" 80 16 env SLURM_LOG_POPUP=1 \
@@ -200,13 +200,12 @@ start_picker "$popup_session" 80 16 env SLURM_LOG_POPUP=1 \
 unset tag_cluster tag_job
 wait_for_view "$popup_session" ALL beta-only-job '' 1
 screen=$(tmux capture-pane -p -t "$popup_session")
-printf '%s\n' "$screen" | grep -F 999 >/dev/null
-printf '%s\n' "$screen" | grep -F PENDING >/dev/null
+! printf '%s\n' "$screen" | grep -F 999 >/dev/null
 ! printf '%s\n' "$screen" | grep -F OPEN >/dev/null
 tmux send-keys -t "$popup_session" BTab
 wait_for_view "$popup_session" beta beta-only-job alpha-only-job 1
 screen=$(tmux capture-pane -p -t "$popup_session")
-printf '%s\n' "$screen" | grep -F 999 >/dev/null
+! printf '%s\n' "$screen" | grep -F 999 >/dev/null
 tmux send-keys -t "$popup_session" Tab
 wait_for_view "$popup_session" ALL alpha-only-job '' 1
 screen=$(tmux capture-pane -p -t "$popup_session")
@@ -215,14 +214,23 @@ tmux send-keys -t "$popup_session" Tab
 wait_for_view "$popup_session" alpha alpha-only-job 999 1
 screen=$(tmux capture-pane -p -t "$popup_session")
 ! printf '%s\n' "$screen" | grep -F beta-only-job >/dev/null
-# Returning to beta must restore the marker for its already-open pane without
-# requiring the user to select it again.
+# Returning to beta keeps the hidden selection. Showing blocked jobs reveals
+# the selected pane with its real metadata; hiding them removes the row again.
 tmux send-keys -t "$popup_session" BTab
 wait_for_view "$popup_session" ALL alpha-only-job '' 1
 tmux send-keys -t "$popup_session" BTab
 wait_for_view "$popup_session" beta beta-only-job alpha-only-job 1
+tmux send-keys -t "$popup_session" b
+wait_for_screen_text "$popup_session" 'Blocked and interactive jobs shown'
+wait_for_screen_text "$popup_session" blocked-open-job
 screen=$(tmux capture-pane -p -t "$popup_session")
 printf '%s\n' "$screen" | grep -E '^.?>?\*.*999' >/dev/null
+printf '%s\n' "$screen" | grep -F PENDING >/dev/null
+! printf '%s\n' "$screen" | grep -F OPEN >/dev/null
+tmux send-keys -t "$popup_session" b
+wait_for_screen_text "$popup_session" 'Blocked and interactive jobs hidden'
+screen=$(tmux capture-pane -p -t "$popup_session")
+! printf '%s\n' "$screen" | grep -F 999 >/dev/null
 
 # The popup recomposes rather than clipping as its window is squeezed. The
 # selection and cluster scope survive every resize, and widening erases all

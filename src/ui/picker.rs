@@ -17,17 +17,22 @@ pub fn pick(
     let _guard = Guard;
     let mut focus = 0usize;
     let mut selected = initial;
+    let mut show_blocked = live_filter
+        .as_ref()
+        .is_some_and(|(_, filter)| filter == "blocked");
     // The pane manager's selection is workspace-wide, while cluster tabs are
     // only views into that workspace. Retain metadata only for selected panes;
     // cloning a full accounting archive here made opening Ctrl-b j scale with
     // every historical job instead of the handful of open panes.
     let mut known_jobs = HashMap::with_capacity(selected.len());
     remember_selected(&mut known_jobs, &jobs, &selected);
+    // Already-open blocked panes remain in the hidden selection catalog, but
+    // the ordinary live view must not bypass its blocked filter to show them.
+    if !show_blocked {
+        jobs.retain(|job| !job.blocked_category());
+    }
     let mut expanded = HashSet::new();
     let mut query = String::new();
-    let mut show_blocked = live_filter
-        .as_ref()
-        .is_some_and(|(_, filter)| filter == "blocked");
     let mut show_warnings = false;
     let mut show_log_warnings = false;
     let mut show_help = false;

@@ -242,12 +242,16 @@ tmux_test send-keys -t "$main_session" b
 wait_text "$main_session" 'Blocked and interactive jobs hidden'
 tmux_test send-keys -t "$main_session" w
 wait_text "$main_session" 'Scheduler notices expanded'
+wait_text "$main_session" '[W WARN OFF]'
 tmux_test send-keys -t "$main_session" w
 wait_text "$main_session" 'Scheduler notices collapsed'
+wait_text "$main_session" '[W WARN OFF]'
 tmux_test send-keys -t "$main_session" W
 wait_text "$main_session" 'Warnings included in log panes'
+wait_text "$main_session" '[W WARN ON]'
 tmux_test send-keys -t "$main_session" W
 wait_text "$main_session" 'Warnings hidden in log panes'
+wait_text "$main_session" '[W WARN OFF]'
 tmux_test send-keys -t "$main_session" A
 wait_text "$main_session" 'Auto-add enabled'
 grep -F '"autoAddDefault":true' "$state" >/dev/null

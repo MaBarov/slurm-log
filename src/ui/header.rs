@@ -197,7 +197,7 @@ fn picker_header_lines(
         ],
     );
     let warning_chip = chip(
-        "w",
+        "W",
         &[
             ("WARN", HeaderTone::Plain),
             (
@@ -272,7 +272,7 @@ fn picker_header_lines(
         &[(&compact_blocked_text, if blocked_count > 0 { HeaderTone::Amber } else { HeaderTone::Muted })],
     );
     let compact_warning = keyed(
-        "w",
+        "W",
         &[(
             if log_warnings { "warnings on" } else { "warnings off" },
             if log_warnings { HeaderTone::Amber } else { HeaderTone::Muted },
@@ -320,7 +320,7 @@ fn picker_header_lines(
                 vec![
                     compact_blocked,
                     keyed(
-                        "w",
+                        "W",
                         &[(
                             if log_warnings { "warn on" } else { "warn off" },
                             if log_warnings {

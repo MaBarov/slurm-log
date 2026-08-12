@@ -25,7 +25,7 @@ fn wide_header_is_the_compact_control_strip() {
     assert!(!layout.too_small);
     assert_eq!(
         lines[0],
-        "slurm-log  [Tab ALL]  [o LIVE ≤2m]  [A AUTO ON]  [b BLOCKED 1 HIDDEN]  [w WARN OFF]"
+        "slurm-log  [Tab ALL]  [o LIVE ≤2m]  [A AUTO ON]  [b BLOCKED 1 HIDDEN]  [W WARN OFF]"
     );
     assert_eq!(
         lines[1],
@@ -43,7 +43,7 @@ fn medium_header_recomposes_into_aligned_rows() {
         let layout = header(width, 20);
         let lines = plain(&layout);
         assert!(lines[0].starts_with("STATUS  [Tab] ALL · [o] LIVE ≤2m · [A] AUTO ON"));
-        assert!(lines[1].starts_with("FILTER  [b] 1 blocked hidden · [w] warnings off"));
+        assert!(lines[1].starts_with("FILTER  [b] 1 blocked hidden · [W] warnings off"));
         assert!(lines.iter().any(|line| line.starts_with("KEYS    ↑↓ move")));
         assert!(
             lines
@@ -61,7 +61,7 @@ fn narrow_header_has_scope_state_filter_and_key_hierarchy() {
         assert!(!layout.too_small, "{width}: {lines:?}");
         assert!(lines[0].starts_with("SCOPE   [Tab] ALL · [o] LIVE ≤2m"));
         assert_eq!(lines[1], "STATE   [A] AUTO ON");
-        assert_eq!(lines[2], "FILTER  [b] 1 blocked hidden · [w] warn off");
+        assert_eq!(lines[2], "FILTER  [b] 1 blocked hidden · [W] warn off");
         assert!(lines.iter().any(|line| line.contains("Enter open")));
         assert!(lines.iter().any(|line| line.contains("? help · q quit")));
         assert!(

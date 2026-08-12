@@ -280,10 +280,10 @@ fn run() -> Result<()> {
             .map(|p| format!("{}:{}", p.cluster, p.job_id))
             .collect();
         let (snapshot, ledger, warnings) = slurm::all_jobs(&config, &args.cluster, "all", false)?;
-        // Blocked jobs are normally hidden from the live picker, but an
-        // already-open pane must keep its real scheduler state. Otherwise it
-        // is replaced by the red synthetic OPEN fallback every time Ctrl-b j
-        // is reopened.
+        // Preserve real metadata for every open pane. The picker seeds its
+        // hidden selection catalog from these entries before applying the
+        // blocked filter, so `b` can reveal the real state without leaking a
+        // blocked pane into the ordinary live list.
         let mut open_metadata: HashMap<_, _> = snapshot
             .iter()
             .filter(|job| open.contains(&job.key()))

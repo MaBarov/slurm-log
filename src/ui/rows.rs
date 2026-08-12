@@ -64,6 +64,7 @@ fn restore_selected(
     known: &HashMap<String, Job>,
     selected: &HashSet<String>,
     active_cluster: &str,
+    show_blocked: bool,
 ) {
     let every_cluster = matches!(active_cluster, "all" | "both");
     let visible: HashSet<_> = jobs
@@ -75,7 +76,10 @@ fn restore_selected(
         .filter_map(|key| {
             let job = known.get(key)?;
             let in_cluster = every_cluster || job.cluster == active_cluster;
-            (in_cluster && !visible.contains(&(job.cluster.as_str(), job.id.as_str())))
+            let category_visible = show_blocked || !job.blocked_category();
+            (in_cluster
+                && category_visible
+                && !visible.contains(&(job.cluster.as_str(), job.id.as_str())))
                 .then(|| job.clone())
         })
         .collect();

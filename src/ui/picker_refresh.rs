@@ -39,7 +39,13 @@
             let active_cluster = live_filter
                 .as_ref()
                 .map_or("all", |(cluster, _)| cluster.as_str());
-            restore_selected(&mut jobs, &known_jobs, &selected, active_cluster);
+            restore_selected(
+                &mut jobs,
+                &known_jobs,
+                &selected,
+                active_cluster,
+                show_blocked,
+            );
         }
         if view_dirty {
             let needle = query.to_lowercase();

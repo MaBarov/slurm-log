@@ -344,20 +344,23 @@ fn grouping_order_is_deterministic_for_equal_statuses() {
 }
 
 #[test]
-fn selected_pane_catalog_is_sparse_and_restores_cross_cluster_jobs() {
+fn selected_pane_catalog_respects_cluster_and_blocked_visibility() {
     let mut local = job("1", "local");
     local.cluster = "sprint".into();
     let mut remote = job("2", "remote");
     remote.cluster = "cispa".into();
+    remote.interactive = true;
     let selected = HashSet::from([local.key(), remote.key()]);
     let mut known = HashMap::new();
     remember_selected(&mut known, &[local.clone(), remote.clone()], &selected);
     assert_eq!(known.len(), 2);
 
     let mut visible = vec![local.clone()];
-    restore_selected(&mut visible, &known, &selected, "sprint");
+    restore_selected(&mut visible, &known, &selected, "sprint", false);
+    assert_eq!(visible, [local.clone()]);
+    restore_selected(&mut visible, &known, &selected, "all", false);
     assert_eq!(visible, [local]);
-    restore_selected(&mut visible, &known, &selected, "all");
+    restore_selected(&mut visible, &known, &selected, "all", true);
     assert_eq!(visible.len(), 2);
     assert_eq!(visible.iter().filter(|job| job.id == "1").count(), 1);
 }
@@ -398,7 +401,7 @@ fn pane_catalog_retains_only_selected_archive_jobs() {
     assert!(optimized < baseline_elapsed);
 
     let mut visible = vec![known.values().next().unwrap().clone()];
-    restore_selected(&mut visible, &known, &selected, "all");
+    restore_selected(&mut visible, &known, &selected, "all", false);
     assert_eq!(visible.len(), selected.len());
     eprintln!("pane catalog 50k jobs: selected-only={optimized:?}, clone-all={baseline_elapsed:?}");
 }
