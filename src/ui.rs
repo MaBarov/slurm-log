@@ -45,6 +45,9 @@ impl Drop for Guard {
 
 include!("ui/picker.rs");
 include!("ui/rows.rs");
+include!("ui/header_style.rs");
+include!("ui/header.rs");
+include!("ui/table.rs");
 include!("ui/help.rs");
 include!("ui/render.rs");
 

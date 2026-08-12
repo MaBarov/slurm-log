@@ -105,6 +105,7 @@ fn draw_popup(
     }
     let header = picker_header_lines(
         width,
+        height,
         manage,
         history,
         auto_add,
@@ -113,45 +114,50 @@ fn draw_popup(
         cluster,
         blocked_count,
     );
-    let header_rows = header.len().min(height.saturating_sub(2) as usize);
+    let header_rows = header.lines.len().min(height.saturating_sub(2) as usize);
     let table_row = header_rows;
     let data_row = table_row + 1;
     let available = height.saturating_sub(data_row as u16 + 1) as usize;
     let top = focus.saturating_sub(available.saturating_sub(1));
+    let table = TableLayout::new(width, cluster);
     // Collapsing a group turns its former child rows into blanks. Those blanks
     // still need to overwrite the full popup width; an empty write leaves the
     // previous terminal cells behind, while EL makes tmux visibly flicker.
     let mut frame = vec![fit_popup_line("", width); height as usize];
-    for (target, line) in frame.iter_mut().zip(header).take(header_rows) {
-        *target = fit_popup_line(&line, width);
-    }
-    frame[table_row] = fit_popup_line(
-        "    CLUSTER  JOB ID / RUNS   STATE               ELAPSED     NAME",
-        width,
-    );
-    for (screen_row, (row_index, row)) in rows
-        .iter()
-        .enumerate()
-        .skip(top)
-        .take(available)
-        .enumerate()
+    for (target, line) in frame
+        .iter_mut()
+        .zip(&header.lines)
+        .take(header_rows)
     {
-        frame[screen_row + data_row] = popup_row(jobs, row, row_index, focus, selected, width);
+        *target = line.render(width as usize, true);
     }
-    let warning = popup_warning(warnings, show_warnings);
-    if height > 0 {
-        frame[height as usize - 1] = popup_styled(
-            fit_popup_line(
-                &format!(
-                    "{}{}",
-                    footer_text(rows.len(), selected.len(), query, &warning, notice),
-                    blocked_summary(blocked_count, blocked)
+    if !header.too_small {
+        frame[table_row] = fit_popup_line(&table.header(), width);
+        for (screen_row, (row_index, row)) in rows
+            .iter()
+            .enumerate()
+            .skip(top)
+            .take(available)
+            .enumerate()
+        {
+            frame[screen_row + data_row] =
+                popup_row(jobs, row, row_index, focus, selected, width, table);
+        }
+        let warning = popup_warning(warnings, show_warnings);
+        if height > 0 {
+            frame[height as usize - 1] = popup_styled(
+                fit_popup_line(
+                    &format!(
+                        "{}{}",
+                        footer_text(rows.len(), selected.len(), query, &warning, notice),
+                        blocked_summary(blocked_count, blocked)
+                    ),
+                    width,
                 ),
-                width,
-            ),
-            Some(90),
-            false,
-        );
+                Some(90),
+                false,
+            );
+        }
     }
     let mut out = Vec::new();
     for (line, content) in frame.iter().enumerate() {
@@ -185,19 +191,15 @@ fn popup_row(
     focus: usize,
     selected: &HashSet<String>,
     width: u16,
+    table: TableLayout,
 ) -> String {
     if let Some(index) = row.job {
         let job = &jobs[index];
-        let text = format!(
-            "{}{}{}  {:<7} {:<15} {:<19} {:<11} {}",
-            if row_index == focus { ">" } else { " " },
-            if selected.contains(&job.key()) { "*" } else { " " },
-            if row.nested { "  " } else { "" },
-            job.cluster,
-            job.id,
-            job.state,
-            job.elapsed,
-            display_name(job)
+        let text = table.job(
+            job,
+            row_index == focus,
+            selected.contains(&job.key()),
+            row.nested,
         );
         let color = if job.running() {
             32
@@ -215,7 +217,10 @@ fn popup_row(
             .iter()
             .all(|&index| selected.contains(&jobs[index].key()));
         popup_styled(
-            fit_popup_line(&group_row_text(row, chosen, row_index == focus), width),
+            fit_popup_line(
+                &compact_group_row(row, chosen, row_index == focus, width),
+                width,
+            ),
             Some(90),
             row_index == focus,
         )
@@ -265,8 +270,6 @@ fn group_row_text(row: &Row, selected: bool, focused: bool) -> String {
         row.name
     )
 }
-
-include!("header.rs");
 
 fn confirm_cancel(jobs: &[Job]) -> Result<bool> {
     let (_, height) = terminal::size()?;

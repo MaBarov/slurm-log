@@ -103,7 +103,15 @@ fn popup_rows_cover_every_state_group_selection_and_warning_mode() {
             nested: index == 1,
             expanded: false,
         };
-        let rendered = popup_row(&jobs, &row, index, index, &selected, 100);
+        let rendered = popup_row(
+            &jobs,
+            &row,
+            index,
+            index,
+            &selected,
+            100,
+            TableLayout::new(100, "all"),
+        );
         assert!(rendered.contains(&format!("\x1b[{color}m")));
         assert!(rendered.contains('*'));
     }
@@ -114,7 +122,18 @@ fn popup_rows_cover_every_state_group_selection_and_warning_mode() {
         nested: false,
         expanded: false,
     };
-    assert!(popup_row(&jobs, &group, 0, 0, &selected, 80).contains("2 runs"));
+    assert!(
+        popup_row(
+            &jobs,
+            &group,
+            0,
+            0,
+            &selected,
+            80,
+            TableLayout::new(80, "all"),
+        )
+        .contains("2 runs")
+    );
     assert_eq!(popup_warning(&[], false), "");
     assert!(popup_warning(&["one".into(), "two".into()], false).contains("2 warning"));
     assert_eq!(popup_warning(&["one".into()], true), " | one");
@@ -136,12 +155,7 @@ fn compact_rows_overwrite_the_width_without_clear_sequences() {
     assert_eq!(fit_popup_line("job", 6), "job   ");
     assert_eq!(fit_popup_line("archive", 4), "arch");
     assert_eq!(fit_popup_line("", 3), "   ");
-    assert_eq!(clip_line("abcdef", 5), "abcd");
-    let (primary, secondary) = compact_commands(true);
-    assert!(primary.contains("Enter apply"));
-    assert!(primary.contains("? help"));
-    assert!(secondary.contains("b blocked"));
-    assert!(secondary.contains("A auto"));
+    assert_eq!(clip_line("abcdef", 5), "abc…");
 }
 
 #[test]
@@ -220,32 +234,6 @@ fn searches_one_hundred_thousand_jobs_within_budget() {
 }
 
 #[test]
-fn compact_header_points_to_static_shortcuts_page() {
-    let header = header_lines(false, HistoryMode::All, true, false, false, "cispa", 3);
-    assert_eq!(header.len(), 6);
-    assert!(header[1].contains("Cluster [ cispa ]"));
-    assert!(header[1].contains("Monitor [ ALL HISTORY ]"));
-    assert!(header[1].contains("Auto-add [ ON ]"));
-    assert!(header[2].contains("Blocked [ 3 HIDDEN ]"));
-    assert!(header[3].contains("Warnings [ HIDDEN ]"));
-    assert!(header[4].contains("Space Select"));
-    assert!(header[5].contains("? Commands"));
-    assert!(!header.join("\n").contains('⚡'));
-
-    let status_columns =
-        ["Cluster", "Monitor", "Auto-add"].map(|label| header[1].find(label).unwrap());
-    let view_columns = ["Window", "Archive", "Blocked"].map(|label| header[2].find(label).unwrap());
-    assert_eq!(status_columns, view_columns);
-
-    let compact = picker_header_lines(80, true, HistoryMode::Hours12, false, true, true, "all", 4);
-    assert_eq!(compact.len(), 4);
-    assert!(compact[0].contains("[ ALL ]"));
-    assert!(compact[1].contains("[ WINDOW LAST 12h ]"));
-    assert!(compact[1].contains("[ BLOCKED 4 SHOWN ]"));
-    assert!(compact[2].contains("Enter apply"));
-}
-
-#[test]
 fn toggle_notices_are_explicit_and_expire_after_about_1500ms() {
     let before = Instant::now();
     let mut notice = None;
@@ -257,6 +245,8 @@ fn toggle_notices_are_explicit_and_expire_after_about_1500ms() {
     assert!(lifetime < Duration::from_millis(1_550));
     assert!(footer_text(4, 1, "", "", &message).contains(&message));
 }
+
+mod responsive;
 
 #[test]
 fn blocked_count_summary_is_quiet_and_actionable() {

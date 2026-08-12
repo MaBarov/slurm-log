@@ -22,6 +22,7 @@ fn draw(
     let (width, height) = terminal::size()?;
     let header = picker_header_lines(
         width,
+        height,
         manage,
         history,
         auto_add,
@@ -30,17 +31,17 @@ fn draw(
         cluster,
         blocked_count,
     );
-    let header_rows = header.len().min(height.saturating_sub(2) as usize);
+    if header.too_small {
+        return draw_too_small(&header, width, height);
+    }
+    let header_rows = header.lines.len().min(height.saturating_sub(2) as usize);
+    let table = TableLayout::new(width, cluster);
     execute!(out, cursor::MoveTo(0, 0))?;
-    for (index, line) in header.iter().take(header_rows).enumerate() {
+    for line in header.lines.iter().take(header_rows) {
         execute!(
             out,
-            SetAttribute(if index == 0 {
-                Attribute::Bold
-            } else {
-                Attribute::Reset
-            }),
-            Print(clip_line(line, width)),
+            SetAttribute(Attribute::Reset),
+            Print(line.render(width.saturating_sub(1) as usize, false)),
             terminal::Clear(ClearType::UntilNewLine),
             Print("\r\n")
         )?;
@@ -48,7 +49,7 @@ fn draw(
     execute!(
         out,
         SetAttribute(Attribute::Bold),
-        Print("    CLUSTER  JOB ID / RUNS   STATE               ELAPSED     NAME"),
+        Print(table.header()),
         terminal::Clear(ClearType::UntilNewLine),
         Print("\r\n"),
         SetAttribute(Attribute::Reset)
@@ -74,20 +75,11 @@ fn draw(
             execute!(
                 out,
                 SetForegroundColor(color),
-                Print(format!(
-                    "{}{}{}  {:<7} {:<15} {:<19} {:<11} {}",
-                    if focused { ">" } else { " " },
-                    if selected.contains(&job.key()) {
-                        "*"
-                    } else {
-                        " "
-                    },
-                    if row.nested { "  " } else { "" },
-                    job.cluster,
-                    job.id,
-                    job.state,
-                    job.elapsed,
-                    display_name(job)
+                Print(table.job(
+                    job,
+                    focused,
+                    selected.contains(&job.key()),
+                    row.nested,
                 )),
                 ResetColor,
                 terminal::Clear(ClearType::UntilNewLine),
@@ -101,7 +93,7 @@ fn draw(
             execute!(
                 out,
                 SetForegroundColor(Color::DarkGrey),
-                Print(group_row_text(row, chosen, focused)),
+                Print(compact_group_row(row, chosen, focused, width)),
                 ResetColor,
                 terminal::Clear(ClearType::UntilNewLine),
                 Print("\r\n")
@@ -142,6 +134,26 @@ fn draw(
     Ok(())
 }
 
+fn draw_too_small(header: &HeaderLayout, width: u16, height: u16) -> Result<()> {
+    let usable = width.saturating_sub(1) as usize;
+    let mut out = Vec::new();
+    execute!(out, cursor::MoveTo(0, 0))?;
+    for row in 0..height {
+        execute!(out, cursor::MoveTo(0, row), terminal::Clear(ClearType::CurrentLine))?;
+    }
+    if let Some(message) = header.lines.first() {
+        execute!(
+            out,
+            cursor::MoveTo(0, 0),
+            Print(message.render(usable, false))
+        )?;
+    }
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(&out)?;
+    stdout.flush()?;
+    Ok(())
+}
+
 fn blocked_summary(count: usize, shown: bool) -> String {
     format!(
         " | blocked: {count} ({})",
@@ -166,21 +178,9 @@ fn footer_text(rows: usize, selected: usize, query: &str, warning: &str, notice:
     )
 }
 
-fn compact_commands(manage: bool) -> (String, String) {
-    (
-        format!(
-            "↑↓ move · Space mark · Enter {} · Tab cluster · / search · ? help",
-            if manage { "apply" } else { "open" }
-        ),
-        "o history · a all history · b blocked · A auto · s scripts · x stop · d dismiss · q quit"
-            .into(),
-    )
-}
-
+#[cfg(test)]
 fn clip_line(text: &str, width: u16) -> String {
-    text.chars()
-        .take(width.saturating_sub(1) as usize)
-        .collect()
+    truncate_display(text, width.saturating_sub(1) as usize)
 }
 
 fn display_name(job: &Job) -> String {

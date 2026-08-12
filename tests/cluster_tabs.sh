@@ -105,8 +105,8 @@ wait_for_view() {
     attempt=0
     while :; do
         screen=$(tmux capture-pane -p -t "$session" 2>/dev/null || true)
-        if { printf '%s\n' "$screen" | grep -F "Cluster [ $cluster ]" >/dev/null \
-                || printf '%s\n' "$screen" | grep -F "slurm-log  [ $cluster ]" >/dev/null; } \
+        if { printf '%s\n' "$screen" | grep -F "[Tab $cluster]" >/dev/null \
+                || printf '%s\n' "$screen" | grep -F "[Tab] $cluster" >/dev/null; } \
             && printf '%s\n' "$screen" | grep -F "$present" >/dev/null \
             && printf '%s\n' "$screen" | grep -F "$selected selected" >/dev/null \
             && { test -z "$absent" || ! printf '%s\n' "$screen" | grep -F "$absent" >/dev/null; }
@@ -148,8 +148,8 @@ start_picker "$main_session" 120 20 "$binary" all --cluster all --refresh 3600
 wait_for_view "$main_session" ALL alpha-only-job '' 0
 screen=$(tmux capture-pane -p -t "$main_session")
 printf '%s\n' "$screen" | grep -F beta-only-job >/dev/null
-printf '%s\n' "$screen" | grep -F 'Space Select' >/dev/null
-printf '%s\n' "$screen" | grep -F 'Auto-add [ OFF ]' >/dev/null
+printf '%s\n' "$screen" | grep -F 'Space mark' >/dev/null
+printf '%s\n' "$screen" | grep -F '[A AUTO OFF]' >/dev/null
 
 # Stop waits for an explicit decision (unrelated keys do not cancel it), sends
 # scancel, and reports success instead of silently returning to the list.
@@ -222,7 +222,33 @@ wait_for_view "$popup_session" ALL alpha-only-job '' 1
 tmux send-keys -t "$popup_session" BTab
 wait_for_view "$popup_session" beta beta-only-job alpha-only-job 1
 screen=$(tmux capture-pane -p -t "$popup_session")
-printf '%s\n' "$screen" | grep -E '^.?>?\*.*beta[[:space:]]+999' >/dev/null
+printf '%s\n' "$screen" | grep -E '^.?>?\*.*999' >/dev/null
+
+# The popup recomposes rather than clipping as its window is squeezed. The
+# selection and cluster scope survive every resize, and widening erases all
+# rows belonging only to the narrow layout.
+tmux send-keys -t "$popup_session" Tab
+wait_for_view "$popup_session" ALL alpha-only-job '' 1
+tmux resize-window -t "$popup_session" -x 63 -y 16
+wait_for_screen_text "$popup_session" 'SCOPE   [Tab] ALL'
+screen=$(tmux capture-pane -p -t "$popup_session")
+printf '%s\n' "$screen" | grep -F 'STATE   [A] AUTO OFF' >/dev/null
+printf '%s\n' "$screen" | grep -F 'FILTER  [b] 1 blocked hidden' >/dev/null
+printf '%s\n' "$screen" | grep -F 'CLUSTER JOB ID' >/dev/null
+! printf '%s\n' "$screen" | grep -F ELAPSED >/dev/null
+printf '%s\n' "$screen" | grep -F '1 selected' >/dev/null
+
+tmux resize-window -t "$popup_session" -x 80 -y 16
+wait_for_screen_text "$popup_session" 'STATUS  [Tab] ALL'
+screen=$(tmux capture-pane -p -t "$popup_session")
+printf '%s\n' "$screen" | grep -F ELAPSED >/dev/null
+! printf '%s\n' "$screen" | grep -F 'SCOPE   ' >/dev/null
+! printf '%s\n' "$screen" | grep -F 'STATE   ' >/dev/null
+
+tmux resize-window -t "$popup_session" -x 43 -y 16
+wait_for_screen_text "$popup_session" 'Window too small'
+screen=$(tmux capture-pane -p -t "$popup_session")
+! printf '%s\n' "$screen" | grep -F alpha-only-job >/dev/null
 tmux send-keys -t "$popup_session" q
 
-printf 'cluster_tabs: ok (main + Ctrl-b j repaint, wrap, reverse, selection; fully offline)\n'
+printf 'cluster_tabs: ok (main + responsive Ctrl-b j repaint, resize, tabs, selection; fully offline)\n'
