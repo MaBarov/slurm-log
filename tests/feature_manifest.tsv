@@ -114,3 +114,4 @@ security.hostile_scheduler_data	offline_hostile.sh
 security.argument_quoting	offline_hostile.sh
 security.private_files	package_smoke.sh
 security.no_external_connections	offline_hostile.sh
+quality.source_file_limit	source_layout.sh
