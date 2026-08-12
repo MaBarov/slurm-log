@@ -1,9 +1,9 @@
 #!/bin/sh
 # slurm-log portable installer
 #
-# Builds and installs slurm-log for the current user, writes an owner-scoped
-# configuration, and checks runtime commands. It never copies another user's
-# state, credentials, daemon socket, or job history.
+# Downloads or builds and installs slurm-log for the current user, writes an
+# owner-scoped configuration, and checks runtime commands. It never copies
+# another user's state, credentials, daemon socket, or job history.
 #
 # Quick setup:
 #   ./install.sh
@@ -15,6 +15,8 @@
 #   --prefix DIR            Install prefix (default: ~/.local)
 #   --state-path FILE       Private state location
 #   --binary FILE           Install an existing binary instead of building
+#   --build                 Build this checkout instead of downloading a release
+#   --version TAG           Install a release tag (default: latest)
 #   --force-config          Replace an existing configuration
 #   Setup starts automatically on interactive installations.
 #   --no-setup              Skip the interactive setup wizard
@@ -30,12 +32,23 @@ ssh_host=
 prefix=${HOME}/.local
 state_path=
 binary=
+build_source=0
+release_version=${SLURM_LOG_VERSION:-latest}
 force_config=0
 path_update=1
 run_setup=1
+release_tmp=
+
+cleanup() {
+    [ -z "$release_tmp" ] || rm -rf "$release_tmp"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -46,6 +59,8 @@ while [ "$#" -gt 0 ]; do
         --prefix) prefix=$2; shift 2 ;;
         --state-path) state_path=$2; shift 2 ;;
         --binary) binary=$2; shift 2 ;;
+        --build) build_source=1; shift ;;
+        --version) release_version=$2; shift 2 ;;
         --force-config) force_config=1; shift ;;
         --no-setup) run_setup=0; shift ;;
         --no-path-update) path_update=0; shift ;;
@@ -53,6 +68,22 @@ while [ "$#" -gt 0 ]; do
         *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
 done
+
+case "$release_version" in
+    latest) ;;
+    v[0-9]*)
+        case "$release_version" in
+            *[!A-Za-z0-9._-]*)
+                printf 'Release version is invalid: %s\n' "$release_version" >&2
+                exit 2
+                ;;
+        esac
+        ;;
+    *)
+        printf 'Release version must be latest or a v-prefixed tag: %s\n' "$release_version" >&2
+        exit 2
+        ;;
+esac
 
 [ -n "$remote_user" ] || remote_user=$local_user
 
@@ -96,19 +127,105 @@ if ! command -v squeue >/dev/null 2>&1 || ! command -v scontrol >/dev/null 2>&1;
     printf 'Warning: local squeue/scontrol not found; remote-only use may still work.\n' >&2
 fi
 
-if [ -z "$binary" ]; then
-    if [ -x "$script_dir/bin/slurm-log" ]; then
-        binary=$script_dir/bin/slurm-log
+build_release() {
+    if [ ! -f "$script_dir/Cargo.toml" ] || ! command -v cargo >/dev/null 2>&1; then
+        printf 'Rust/Cargo and a source checkout are required for --build.\n' >&2
+        return 1
+    fi
+    cargo build --locked --release --manifest-path "$script_dir/Cargo.toml"
+    binary=$script_dir/target/release/slurm-log
+}
+
+download_file() {
+    source_url=$1
+    destination=$2
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 2 --connect-timeout 10 -o "$destination" "$source_url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=10 -O "$destination" "$source_url"
     else
-        if ! command -v cargo >/dev/null 2>&1; then
-            printf 'Rust cargo is required to build. Install Rust or pass --binary FILE.\n' >&2
-            exit 1
-        fi
-        cargo build --locked --release --manifest-path "$script_dir/Cargo.toml"
-        binary=$script_dir/target/release/slurm-log
+        printf 'Install curl or wget to download a release.\n' >&2
+        return 1
+    fi
+}
+
+download_release() {
+    case "$(uname -m)" in
+        x86_64|amd64) architecture=x86_64 ;;
+        *)
+            printf 'No prebuilt release for architecture %s; trying a source build.\n' "$(uname -m)" >&2
+            return 1
+            ;;
+    esac
+    if ! command -v sha256sum >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+        printf 'sha256sum and tar are required to install a prebuilt release.\n' >&2
+        return 1
+    fi
+
+    release_root=${SLURM_LOG_RELEASE_ROOT:-https://github.com/MaBarov/slurm-log/releases}
+    case "$release_root" in
+        https://*|file://*) ;;
+        *) printf 'Unsafe release URL: %s\n' "$release_root" >&2; return 2 ;;
+    esac
+    if [ "$release_version" = latest ]; then
+        release_base=$release_root/latest/download
+    else
+        release_base=$release_root/download/$release_version
+    fi
+    asset=slurm-log-linux-$architecture.tar.gz
+    release_tmp=$(mktemp -d) || return 1
+    archive=$release_tmp/$asset
+    checksum=$archive.sha256
+    printf 'Downloading slurm-log %s for Linux %s...\n' "$release_version" "$architecture"
+    if ! download_file "$release_base/$asset" "$archive" ||
+       ! download_file "$release_base/$asset.sha256" "$checksum"; then
+        printf 'Prebuilt release is unavailable.\n' >&2
+        return 1
+    fi
+
+    expected=$(awk 'NR == 1 { print $1 }' "$checksum" | tr '[:upper:]' '[:lower:]')
+    actual=$(sha256sum "$archive" | awk '{ print $1 }')
+    if ! printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || [ "$expected" != "$actual" ]; then
+        printf 'Release checksum verification failed; nothing was installed.\n' >&2
+        return 2
+    fi
+    mkdir -p "$release_tmp/payload"
+    if ! tar -xzf "$archive" -C "$release_tmp/payload" slurm-log/bin/slurm-log; then
+        printf 'Release archive does not contain the expected binary.\n' >&2
+        return 2
+    fi
+    candidate=$release_tmp/payload/slurm-log/bin/slurm-log
+    if [ ! -f "$candidate" ] || [ -L "$candidate" ]; then
+        printf 'Release binary is missing or unsafe.\n' >&2
+        return 2
+    fi
+    chmod 755 "$candidate"
+    if ! "$candidate" --help >/dev/null 2>&1; then
+        printf 'Release binary failed its startup check.\n' >&2
+        return 2
+    fi
+    binary=$candidate
+}
+
+if [ -z "$binary" ]; then
+    if [ "$build_source" -eq 1 ]; then
+        build_release
+    elif [ -x "$script_dir/bin/slurm-log" ]; then
+        binary=$script_dir/bin/slurm-log
+    elif download_release; then
+        :
+    else
+        download_status=$?
+        [ "$download_status" -ne 2 ] || exit 1
+        printf 'Falling back to a locked source build.\n' >&2
+        build_release
     fi
 fi
 [ -x "$binary" ] || { printf 'Binary is not executable: %s\n' "$binary" >&2; exit 1; }
+if ! "$binary" --help >/dev/null 2>&1; then
+    printf 'Binary failed its startup check: %s\n' "$binary" >&2
+    exit 1
+fi
 
 umask 077
 mkdir -p "$prefix/bin" "$config_dir" "$(dirname -- "$state_path")"

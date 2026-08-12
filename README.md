@@ -19,7 +19,19 @@ Requirements:
 - Rust/Cargo only when rebuilding instead of using the bundled Linux binary
 - `sacct` only on clusters where accounting is enabled
 
-Extract the shared archive and run:
+Install the latest verified x86-64 Linux release directly from GitHub:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/MaBarov/slurm-log/main/install.sh
+sh install.sh
+```
+
+The script downloads only the release binary from the archive, verifies its
+published SHA-256 checksum, installs it for the current Unix user, and starts
+personal setup. It does not require Rust. To pin a release, use
+`sh install.sh --version v0.1.0`.
+
+Alternatively, extract a shared release archive and run:
 
 ```bash
 tar -xzf slurm-log-linux-x86_64.tar.gz
@@ -32,14 +44,16 @@ wizard lets each user add only the local and SSH clusters they actually use;
 an SSH host can be a hostname or an alias from `~/.ssh/config`. The installer:
 
 1. checks runtime dependencies;
-2. uses the bundled native binary, or builds a locked release when necessary;
+2. uses a bundled binary, downloads a verified release, or builds with
+   `--build` when requested;
 3. installs it to `~/.local/bin/slurm-log`;
 4. creates a private configuration and state directory;
 5. starts the interactive cluster and sbatch-bank setup wizard;
 6. explains how to add `~/.local/bin` to `PATH` when necessary.
 
-Run `./install.sh --help` for custom prefixes, state paths, prebuilt binaries,
-configuration replacement, and the noninteractive `--no-setup` option.
+Run `./install.sh --help` for pinned versions, source builds, custom prefixes,
+state paths, prebuilt binaries, configuration replacement, and the
+noninteractive `--no-setup` option.
 
 ## First run
 
@@ -221,10 +235,14 @@ From the source directory:
 ./package.sh
 ```
 
-This creates `dist/slurm-log-linux-ARCH.tar.gz` containing portable source,
-installer scripts, documentation, an optimized native binary, and the example
-configuration. It excludes Cargo build trees, personal configuration, state,
-sockets, and job history.
+This creates `dist/slurm-log-linux-ARCH.tar.gz` and its `.sha256` file. The
+archive contains portable source, installer scripts, documentation, an
+optimized native binary, and the example configuration. It excludes Cargo
+build trees, personal configuration, state, sockets, and job history.
+
+Pushing a `v*` tag runs the offline suite in GitHub Actions, builds a static
+x86-64 Linux binary, packages it, and publishes both the archive and checksum
+as a GitHub release.
 
 ## Manual build
 

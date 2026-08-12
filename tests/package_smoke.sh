@@ -15,11 +15,72 @@ for command in tmux ssh squeue scontrol; do
     printf '#!/bin/sh\nexit 0\n' >"$fake_bin/$command"
     chmod 755 "$fake_bin/$command"
 done
+# package.sh always invokes Cargo to prevent stale release artifacts. The test
+# already has the freshly built binary from test-all.sh, so this hermetic stub
+# lets it exercise packaging without reaching a toolchain or the network.
+printf '#!/bin/sh\nexit 0\n' >"$fake_bin/cargo"
+chmod 755 "$fake_bin/cargo"
 
 export HOME=$home_dir
 export XDG_CONFIG_HOME=$home_dir/config
 export XDG_STATE_HOME=$home_dir/state
 export PATH=$fake_bin:/usr/local/bin:/usr/bin:/bin
+
+# A release package carries a matching checksum and can be consumed by a
+# standalone copy of install.sh without Cargo or network access.
+release_fixture=$test_root/release
+release_archive=$release_fixture/slurm-log-linux-x86_64.tar.gz
+mkdir -p "$release_fixture"
+"$project_dir/package.sh" "$release_archive" >/dev/null
+test -s "$release_archive"
+test -s "$release_archive.sha256"
+expected=$(awk 'NR == 1 { print $1 }' "$release_archive.sha256")
+test "$expected" = "$(sha256sum "$release_archive" | awk '{ print $1 }')"
+tar -tzf "$release_archive" | grep -Fx 'slurm-log/bin/slurm-log' >/dev/null
+
+cat >"$fake_bin/curl" <<'EOF'
+#!/bin/sh
+output=
+url=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o) output=$2; shift 2 ;;
+        *) url=$1; shift ;;
+    esac
+done
+cp "$SLURM_LOG_RELEASE_FIXTURE/$(basename -- "$url")" "$output"
+EOF
+chmod 755 "$fake_bin/curl"
+standalone=$test_root/standalone
+mkdir -p "$standalone"
+cp "$project_dir/install.sh" "$standalone/install.sh"
+"$standalone/install.sh" --help | grep -F -- '--no-path-update' >/dev/null
+if "$standalone/install.sh" --version '../unsafe' >/dev/null 2>&1; then
+    printf 'Installer accepted an unsafe release tag\n' >&2
+    exit 1
+fi
+SLURM_LOG_RELEASE_FIXTURE=$release_fixture \
+SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
+XDG_CONFIG_HOME=$home_dir/download-config \
+XDG_STATE_HOME=$home_dir/download-state \
+    "$standalone/install.sh" --prefix "$home_dir/download-prefix" \
+    --no-setup --no-path-update >/dev/null
+cmp "$home_dir/download-prefix/bin/slurm-log" "$project_dir/target/release/slurm-log"
+
+# A forged checksum must fail closed and leave no installed binary.
+cp "$release_archive.sha256" "$test_root/good.sha256"
+printf '%064d  slurm-log-linux-x86_64.tar.gz\n' 0 >"$release_archive.sha256"
+if SLURM_LOG_RELEASE_FIXTURE=$release_fixture \
+   SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
+   XDG_CONFIG_HOME=$home_dir/forged-config \
+   XDG_STATE_HOME=$home_dir/forged-state \
+   "$standalone/install.sh" --prefix "$home_dir/forged-prefix" \
+   --no-setup --no-path-update >/dev/null 2>&1; then
+    printf 'Installer accepted a forged release checksum\n' >&2
+    exit 1
+fi
+test ! -e "$home_dir/forged-prefix/bin/slurm-log"
+mv "$test_root/good.sha256" "$release_archive.sha256"
 
 "$project_dir/install.sh" \
     --binary "$project_dir/target/release/slurm-log" \
