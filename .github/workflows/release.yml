@@ -15,7 +15,12 @@ jobs:
       contents: write
     steps:
       - name: Check out the tagged source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Install the isolated tmux test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes tmux
 
       - name: Run the complete offline suite
         run: ./test-all.sh
@@ -23,7 +28,6 @@ jobs:
       - name: Install the static Linux target
         run: |
           rustup target add x86_64-unknown-linux-musl
-          sudo apt-get update
           sudo apt-get install --yes musl-tools
 
       - name: Build the portable release archive
