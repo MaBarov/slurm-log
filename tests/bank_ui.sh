@@ -31,7 +31,28 @@ cat >"$BANK_UI_SUBMIT_INPUT"
 printf '987654321\n'
 EOF
 chmod 755 "$test_root/bin/sbatch"
+cat >"$test_root/bin/scontrol" <<'EOF'
+#!/bin/sh
+# Model the short scheduler-registration gap after sbatch returns.
+exit 1
+EOF
+cat >"$test_root/bin/squeue" <<'EOF'
+#!/bin/sh
+printf '987654321|PENDING|local|00:00|Resources|debug|Unknown|1|sbatch\n'
+EOF
+cat >"$test_root/bin/sacct" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+cat >"$test_root/bin/ssh" <<'EOF'
+#!/bin/sh
+exit 99
+EOF
+chmod 755 "$test_root/bin/scontrol" "$test_root/bin/squeue" \
+    "$test_root/bin/sacct" "$test_root/bin/ssh"
 printf '%s\n' "{\"clusters\":[{\"name\":\"local\",\"transport\":\"local\",\"user\":\"offline\",\"sshHost\":\"\",\"workingDirectory\":\"$test_root\",\"accounting\":false},{\"name\":\"remote\",\"transport\":\"ssh\",\"user\":\"offline\",\"sshHost\":\"offline.invalid\",\"workingDirectory\":\"/work\",\"accounting\":true}],\"sbatchBanks\":[{\"path\":\"$test_root/bank\",\"name\":\"Tests\"}],\"statePath\":\"$test_root/state/state.json\"}" >"$config"
+tmux set-environment -g PATH "$test_root/bin:/usr/local/bin:/usr/bin:/bin"
+tmux set-environment -g SLURM_LOG_CONFIG "$config"
 
 tmux new-session -d -x 110 -y 20 -s "$session" \
     env PATH="$test_root/bin:/usr/local/bin:/usr/bin:/bin" \
@@ -127,9 +148,24 @@ while test ! -s "$test_root/submitted.sbatch"; do
 done
 cmp "$test_root/bank/local_train.sbatch" "$test_root/submitted.sbatch"
 attempt=0
-while ! tmux list-panes -a -F '#{@slurm_log_job_id}' | grep -Fx 987654321 >/dev/null; do
+submitted_pane=
+while test -z "$submitted_pane"; do
+    submitted_pane=$(tmux list-panes -a -F '#{pane_id}|#{@slurm_log_job_id}' |
+        awk -F '|' '$2 == "987654321" { print $1; exit }')
     attempt=$((attempt + 1))
     test "$attempt" -lt 500 || { printf 'Submitted job pane was not opened\n' >&2; exit 1; }
+    sleep 0.01
+done
+test "$(tmux display-message -p -t "$submitted_pane" '#{pane_dead}')" = 0
+attempt=0
+while :; do
+    screen=$(tmux capture-pane -p -t "$submitted_pane" 2>/dev/null || true)
+    case "$screen" in *'WAITING FOR LOG  local:987654321'*) break ;; esac
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 500 || {
+        printf 'Submitted pane did not survive scheduler registration lag\n' >&2
+        exit 1
+    }
     sleep 0.01
 done
 printf 'bank_ui: ok (cluster filters + reliable submit/open confirmation; fully offline)\n'

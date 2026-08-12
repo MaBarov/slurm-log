@@ -60,6 +60,7 @@ fn interactive_monitor_explains_missing_log_and_safe_close() {
             elapsed: "00:12".into(),
             partition: "gpu".into(),
             reason: "node-a".into(),
+            interactive: true,
             ..Job::default()
         },
         false,
@@ -74,7 +75,30 @@ fn interactive_monitor_explains_missing_log_and_safe_close() {
 
 #[test]
 fn ended_interactive_monitor_waits_for_enter() {
-    let frame = interactive_frame(&Job::default(), true);
+    let frame = interactive_frame(
+        &Job {
+            interactive: true,
+            ..Job::default()
+        },
+        true,
+    );
     assert!(frame.contains("allocation has ended"));
     assert!(frame.contains("Press Enter"));
+}
+
+#[test]
+fn pending_scheduler_lag_promises_automatic_log_attachment() {
+    let frame = interactive_frame(
+        &Job {
+            cluster: "local".into(),
+            id: "42".into(),
+            name: "train".into(),
+            state: "PENDING".into(),
+            ..Job::default()
+        },
+        false,
+    );
+    assert!(frame.contains("WAITING FOR LOG  local:42  train"));
+    assert!(frame.contains("will attach automatically"));
+    assert!(!frame.contains("INTERACTIVE ALLOCATION"));
 }

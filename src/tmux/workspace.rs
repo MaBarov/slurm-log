@@ -21,7 +21,10 @@ pub fn open(config: &Config, jobs: &[Job], lines: usize, show_log_warnings: bool
             rows.max(5).to_string(),
         ]);
     }
-    args.extend(watcher(config, &jobs[0], lines, show_log_warnings));
+    // Keep the first pane alive while its options and identity are installed.
+    // A newly submitted job may not be visible to scontrol yet; starting the
+    // follower first lets that transient failure remove the entire session.
+    args.extend(["sh".into(), "-c".into(), "while :; do sleep 60; done".into()]);
     let first = tmux(args)?;
     if !first.status.success() {
         bail!("tmux new-session failed");
@@ -33,6 +36,21 @@ pub fn open(config: &Config, jobs: &[Job], lines: usize, show_log_warnings: bool
     .to_string();
     label(&first_pane, &jobs[0])?;
     setup(config, &session)?;
+    let mut first_watcher = vec!["respawn-pane".into(), "-k".into(), "-t".into(), first_pane];
+    first_watcher.extend(watcher(config, &jobs[0], lines, show_log_warnings));
+    let started = tmux(first_watcher)?;
+    if !started.status.success() {
+        let reason = String::from_utf8_lossy(&started.stderr).trim().to_string();
+        let _ = tmux(["kill-session", "-t", &session]);
+        bail!(
+            "could not start the first log follower: {}",
+            if reason.is_empty() {
+                "tmux respawn failed"
+            } else {
+                &reason
+            }
+        );
+    }
     for job in &jobs[1..] {
         let mut args = vec![
             "split-window".into(),

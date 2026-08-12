@@ -142,8 +142,8 @@ expect_fail() {
 "$binary" -h >"$test_root/help-short"
 cmp "$test_root/help-long" "$test_root/help-short"
 grep -F 'slurm-log — fast, owner-scoped' "$test_root/help-long" >/dev/null
-test "$("$binary" --version)" = 'slurm-log 0.1.0'
-test "$("$binary" -V)" = 'slurm-log 0.1.0'
+test "$("$binary" --version)" = 'slurm-log 0.1.1'
+test "$("$binary" -V)" = 'slurm-log 0.1.1'
 expect_fail --does-not-exist
 expect_fail --cluster
 expect_fail --lines nope
@@ -209,11 +209,12 @@ expect_fail submit missing.sbatch --cluster alpha
 # Direct open forms, selection through fzf, newest-job mode, and watcher args.
 : >"$calls"
 "$binary" alpha 101 --lines 7 --show-log-warnings
-grep -F 'tmux new-session' "$calls" | grep -F -- '--pane-follow --lines 7' | grep -F -- '--show-log-warnings alpha 101' >/dev/null
+grep -F 'tmux new-session' "$calls" >/dev/null
+grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--pane-follow --lines 7' | grep -F -- '--show-log-warnings alpha 101' >/dev/null
 : >"$calls"
 "$binary" 101 --lines 9
 grep -F 'scontrol show job 101' "$calls" >/dev/null
-grep -F 'tmux new-session' "$calls" | grep -F -- '--lines 9' >/dev/null
+grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--lines 9' >/dev/null
 : >"$calls"
 "$binary" fzf --cluster alpha
 grep -F 'fzf -m' "$calls" >/dev/null

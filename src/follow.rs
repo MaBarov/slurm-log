@@ -53,13 +53,21 @@ pub fn run(
     pane: bool,
     show_log_warnings: bool,
 ) -> Result<i32> {
-    let (path, resolved_name) = slurm::terminal_path(config, &job.cluster, &job.id)?;
+    let (path, resolved_name) = match slurm::terminal_path(config, &job.cluster, &job.id) {
+        Ok(found) => found,
+        // sbatch can return before a new pending job is registered in
+        // scontrol. Keep monitoring the queue instead of killing its pane.
+        Err(_) if job.pending() => {
+            return run_interactive_monitor(config, job, lines, pane, show_log_warnings);
+        }
+        Err(error) => return Err(error),
+    };
     if pane && let Ok(pane_id) = env::var("TMUX_PANE") {
         crate::tmux::set_pane_job_name(&pane_id, &resolved_name);
     }
     crate::state::Ledger::mark_opened(&config.state_path, job)?;
     let Some(path) = path else {
-        return run_interactive_monitor(config, job, pane);
+        return run_interactive_monitor(config, job, lines, pane, show_log_warnings);
     };
     print!("\x1b[3J\x1b[2J\x1b[H");
     io::stdout().flush()?;
@@ -185,7 +193,13 @@ pub fn run(
     }
 }
 
-fn run_interactive_monitor(config: &Config, job: &Job, pane: bool) -> Result<i32> {
+fn run_interactive_monitor(
+    config: &Config,
+    job: &Job,
+    lines: usize,
+    pane: bool,
+    show_log_warnings: bool,
+) -> Result<i32> {
     struct RawModeGuard(bool);
     impl Drop for RawModeGuard {
         fn drop(&mut self) {
@@ -201,7 +215,6 @@ fn run_interactive_monitor(config: &Config, job: &Job, pane: bool) -> Result<i32
     let mut rendered = String::new();
     let mut missing = 0_u8;
     let mut refresh_at = Instant::now();
-
     loop {
         if Instant::now() >= refresh_at {
             refresh_at = Instant::now() + Duration::from_secs(3);
@@ -215,6 +228,19 @@ fn run_interactive_monitor(config: &Config, job: &Job, pane: bool) -> Result<i32
                     }
                 }
                 Err(_) => missing = 0,
+            }
+
+            // A freshly returned sbatch ID may briefly be absent from
+            // scontrol. As soon as Slurm publishes its stdout path, replace
+            // this lightweight monitor with the normal log follower.
+            if current.active() && !current.interactive {
+                match slurm::terminal_path(config, &current.cluster, &current.id) {
+                    Ok((Some(_), _)) => {
+                        return run(config, &current, lines, pane, show_log_warnings);
+                    }
+                    Ok((None, _)) => current.interactive = true,
+                    Err(_) => {}
+                }
             }
 
             if missing >= 2 || !current.active() {
@@ -250,54 +276,7 @@ fn run_interactive_monitor(config: &Config, job: &Job, pane: bool) -> Result<i32
     }
 }
 
-fn interactive_frame(job: &Job, ended: bool) -> String {
-    let name = if job.name.is_empty() {
-        "interactive"
-    } else {
-        &job.name
-    };
-    let state = if job.state.is_empty() {
-        "ACTIVE"
-    } else {
-        &job.state
-    };
-    let elapsed = if job.elapsed.is_empty() {
-        "—"
-    } else {
-        &job.elapsed
-    };
-    let place = [job.partition.as_str(), job.reason.as_str()]
-        .into_iter()
-        .filter(|part| !part.is_empty() && *part != "None")
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let prompt = if ended {
-        "The allocation has ended. Press Enter to close this pane."
-    } else {
-        "Ctrl-b i details · Enter closes this monitor (the allocation keeps running)"
-    };
-    format!(
-        "INTERACTIVE ALLOCATION  {}:{}  {}\r\n{}  ·  elapsed {}\r\nPLACE  {}\r\n\r\nSlurm created no stdout log for this interactive allocation (BatchFlag=0).\r\nOutput remains in the terminal or agent session that launched it; another PTY cannot be mirrored here.\r\n\r\n{}\r\n",
-        job.cluster,
-        job.id,
-        name,
-        state,
-        elapsed,
-        if place.is_empty() { "—" } else { &place },
-        prompt
-    )
-}
-
-fn render_monitor(frame: &str, previous: &mut String) -> io::Result<()> {
-    if frame == previous {
-        return Ok(());
-    }
-    print!("\x1b[3J\x1b[2J\x1b[H{frame}");
-    io::stdout().flush()?;
-    previous.clear();
-    previous.push_str(frame);
-    Ok(())
-}
+include!("follow/monitor_frame.rs");
 
 fn close_monitor_pane(pane: bool) {
     if pane && let Ok(pane_id) = env::var("TMUX_PANE") {
