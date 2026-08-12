@@ -1,0 +1,30 @@
+name: rust
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Lint every target
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run the complete offline suite
+        run: ./test-all.sh
