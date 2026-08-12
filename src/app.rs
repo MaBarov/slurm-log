@@ -290,11 +290,12 @@ fn run() -> Result<()> {
             .cloned()
             .map(|job| (job.key(), job))
             .collect();
-        let blocked_count = slurm::visible_jobs(snapshot.clone(), &ledger, 0, true)
+        let blocked_count =
+            slurm::visible_jobs(snapshot.clone(), &ledger, slurm::HistoryMode::Live, true)
             .iter()
             .filter(|job| job.blocked_category())
             .count();
-        let mut jobs = slurm::visible_jobs(snapshot, &ledger, 0, false);
+        let mut jobs = slurm::visible_jobs(snapshot, &ledger, slurm::HistoryMode::Live, false);
         let mut visible_keys: HashSet<_> = jobs.iter().map(Job::key).collect();
         for pane in panes {
             let key = format!("{}:{}", pane.cluster, pane.job_id);
@@ -312,7 +313,7 @@ fn run() -> Result<()> {
             ledger,
             open,
             true,
-            0,
+            slurm::HistoryMode::Live,
             Some((args.cluster.clone(), "all".into())),
             Some(session.to_string()),
             warnings,
@@ -362,14 +363,16 @@ fn run() -> Result<()> {
     }
     loop {
         let history_mode = if args.archive {
-            2
-        } else if ["failed", "blocked"].contains(&filter) {
-            1
+            slurm::HistoryMode::All
         } else {
-            0
+            slurm::HistoryMode::Live
         };
-        let (jobs, ledger, warnings) =
-            slurm::all_jobs(&config, &args.cluster, filter, args.archive)?;
+        let (jobs, ledger, warnings) = slurm::all_jobs(
+            &config,
+            &args.cluster,
+            filter,
+            history_mode.scheduler_archive(),
+        )?;
         let blocked_count = slurm::visible_jobs(jobs.clone(), &ledger, history_mode, true)
             .iter()
             .filter(|job| job.blocked_category())

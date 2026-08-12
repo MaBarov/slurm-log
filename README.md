@@ -66,7 +66,8 @@ Press `?` inside the picker for the complete command reference. Common keys:
 - arrows or `j`/`k`: navigate;
 - Space: select;
 - Enter: open selected logs;
-- `o` / `a`: recent history / bounded accounting archive;
+- `o`: cycle jobs from the last 2h, 12h, 1 day, 1 week, all history, or live;
+- `a`: toggle directly between all accounting history and live jobs;
 - `/`: search;
 - `i`: inspect the focused job's live resource details;
 - `q`: quit.

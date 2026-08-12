@@ -221,10 +221,10 @@ fn searches_one_hundred_thousand_jobs_within_budget() {
 
 #[test]
 fn compact_header_points_to_static_shortcuts_page() {
-    let header = header_lines(false, 2, true, false, false, "cispa", 3);
+    let header = header_lines(false, HistoryMode::All, true, false, false, "cispa", 3);
     assert_eq!(header.len(), 6);
     assert!(header[1].contains("Cluster [ cispa ]"));
-    assert!(header[1].contains("Monitor [ ARCHIVE ]"));
+    assert!(header[1].contains("Monitor [ ALL HISTORY ]"));
     assert!(header[1].contains("Auto-add [ ON ]"));
     assert!(header[2].contains("Blocked [ 3 HIDDEN ]"));
     assert!(header[3].contains("Warnings [ HIDDEN ]"));
@@ -234,12 +234,13 @@ fn compact_header_points_to_static_shortcuts_page() {
 
     let status_columns =
         ["Cluster", "Monitor", "Auto-add"].map(|label| header[1].find(label).unwrap());
-    let view_columns = ["Recent", "Archive", "Blocked"].map(|label| header[2].find(label).unwrap());
+    let view_columns = ["Window", "Archive", "Blocked"].map(|label| header[2].find(label).unwrap());
     assert_eq!(status_columns, view_columns);
 
-    let compact = picker_header_lines(80, true, 1, false, true, true, "all", 4);
+    let compact = picker_header_lines(80, true, HistoryMode::Hours12, false, true, true, "all", 4);
     assert_eq!(compact.len(), 4);
     assert!(compact[0].contains("[ ALL ]"));
+    assert!(compact[1].contains("[ WINDOW LAST 12h ]"));
     assert!(compact[1].contains("[ BLOCKED 4 SHOWN ]"));
     assert!(compact[2].contains("Enter apply"));
 }

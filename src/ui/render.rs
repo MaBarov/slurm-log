@@ -5,7 +5,7 @@ fn draw(
     focus: usize,
     selected: &HashSet<String>,
     manage: bool,
-    history: u8,
+    history: HistoryMode,
     auto_add: bool,
     blocked: bool,
     show_warnings: bool,
@@ -172,7 +172,7 @@ fn compact_commands(manage: bool) -> (String, String) {
             "↑↓ move · Space mark · Enter {} · Tab cluster · / search · ? help",
             if manage { "apply" } else { "open" }
         ),
-        "o recent · a archive · b blocked · A auto · s scripts · x stop · d dismiss · q quit"
+        "o history · a all history · b blocked · A auto · s scripts · x stop · d dismiss · q quit"
             .into(),
     )
 }

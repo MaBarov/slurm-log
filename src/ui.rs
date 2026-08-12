@@ -14,7 +14,12 @@ use crossterm::{
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
-use crate::{config::Config, model::Job, slurm, state::Ledger};
+use crate::{
+    config::Config,
+    model::Job,
+    slurm::{self, HistoryMode},
+    state::Ledger,
+};
 
 pub struct PickResult {
     pub jobs: Vec<Job>,

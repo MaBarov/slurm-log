@@ -105,28 +105,43 @@
                 selection_dirty = true;
             }
             KeyCode::Char('d') if !rows.is_empty() => {
-                let targets: Vec<Job> = if selected.is_empty() {
-                    rows[focus]
-                        .members
-                        .iter()
-                        .map(|&i| jobs[i].clone())
-                        .collect()
+                if history_mode != HistoryMode::Live {
+                    set_notice(
+                        &mut notice,
+                        "Dismissal is unavailable in history/archive views",
+                    );
                 } else {
-                    jobs.iter()
-                        .filter(|job| selected.contains(&job.key()))
-                        .cloned()
-                        .collect()
-                };
-                Ledger::dismiss(&config.state_path, &targets)?;
-                ledger = Ledger::load(&config.state_path)?;
-                let hidden: HashSet<_> = targets
-                    .iter()
-                    .map(Job::key)
-                    .filter(|key| ledger.dismissed.contains_key(key))
-                    .collect();
-                jobs.retain(|job| !hidden.contains(&job.key()));
-                selected.retain(|key| !hidden.contains(key));
-                view_dirty = true;
+                    let targets: Vec<Job> = if selected.is_empty() {
+                        rows[focus]
+                            .members
+                            .iter()
+                            .map(|&i| jobs[i].clone())
+                            .collect()
+                    } else {
+                        jobs.iter()
+                            .filter(|job| selected.contains(&job.key()))
+                            .cloned()
+                            .collect()
+                    };
+                    let dismissed = Ledger::dismiss(&config.state_path, &targets)?;
+                    if dismissed == 0 {
+                        set_notice(&mut notice, "Only finished live jobs can be dismissed");
+                    } else {
+                        ledger = Ledger::load(&config.state_path)?;
+                        let hidden: HashSet<_> = targets
+                            .iter()
+                            .map(Job::key)
+                            .filter(|key| ledger.dismissed.contains_key(key))
+                            .collect();
+                        jobs.retain(|job| !hidden.contains(&job.key()));
+                        selected.retain(|key| !hidden.contains(key));
+                        set_notice(
+                            &mut notice,
+                            &format!("Dismissed {dismissed} finished job(s)"),
+                        );
+                        view_dirty = true;
+                    }
+                }
                 popup_frame.clear();
             }
             KeyCode::Char('x') if !rows.is_empty() => {
@@ -207,15 +222,8 @@
                 }
             }
             KeyCode::Char('o') if live_filter.is_some() => {
-                history_mode = if history_mode == 1 { 0 } else { 1 };
-                set_notice(
-                    &mut notice,
-                    if history_mode == 1 {
-                        "Recent completed jobs shown"
-                    } else {
-                        "Recent completed jobs hidden"
-                    },
-                );
+                history_mode = history_mode.next();
+                set_notice(&mut notice, history_mode.notice());
                 query.clear();
                 catalog_dirty |= refresh(
                     config,
@@ -231,15 +239,12 @@
                 view_dirty = true;
             }
             KeyCode::Char('a') if live_filter.is_some() => {
-                history_mode = if history_mode == 2 { 0 } else { 2 };
-                set_notice(
-                    &mut notice,
-                    if history_mode == 2 {
-                        "Accounting archive shown"
-                    } else {
-                        "Live jobs shown"
-                    },
-                );
+                history_mode = if history_mode == HistoryMode::All {
+                    HistoryMode::Live
+                } else {
+                    HistoryMode::All
+                };
+                set_notice(&mut notice, history_mode.notice());
                 query.clear();
                 catalog_dirty |= refresh(
                     config,

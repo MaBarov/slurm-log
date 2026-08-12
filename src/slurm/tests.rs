@@ -197,44 +197,6 @@ fn extended_scheduler_fields_are_preserved() {
 }
 
 #[test]
-fn visibility_matches_live_archive_and_dismiss_rules() {
-    let running = Job {
-        cluster: "cispa".into(),
-        id: "1".into(),
-        state: "RUNNING".into(),
-        ..Job::default()
-    };
-    let failed = Job {
-        cluster: "cispa".into(),
-        id: "2".into(),
-        state: "FAILED".into(),
-        ..Job::default()
-    };
-    let mut ledger = Ledger::default();
-    ledger.opened.insert(failed.key(), "now".into());
-    assert_eq!(
-        visible_jobs(vec![running.clone(), failed.clone()], &ledger, 0, false),
-        vec![running.clone()]
-    );
-    assert_eq!(
-        visible_jobs(vec![failed.clone()], &ledger, 2, false),
-        vec![failed.clone()]
-    );
-    ledger.dismissed.insert(failed.key(), "now".into());
-    assert!(visible_jobs(vec![failed.clone()], &ledger, 0, false).is_empty());
-    assert_eq!(
-        visible_jobs(vec![failed.clone()], &ledger, 2, false),
-        vec![failed]
-    );
-    ledger.dismissed.insert(running.key(), "now".into());
-    assert!(visible_jobs(vec![running.clone()], &ledger, 0, false).is_empty());
-    assert_eq!(
-        visible_jobs(vec![running.clone()], &ledger, 2, false),
-        vec![running]
-    );
-}
-
-#[test]
 fn scheduler_query_lock_is_private_and_cross_process_exclusive() {
     let directory = tempfile::tempdir().unwrap();
     let cache = directory.path().join("queue-cache.json");
@@ -254,33 +216,7 @@ fn scheduler_query_lock_is_private_and_cross_process_exclusive() {
     assert!(second.try_lock_exclusive().is_ok());
 }
 
-#[test]
-fn blocked_jobs_are_hidden_until_requested() {
-    let blocked = Job {
-        cluster: "sprint".into(),
-        id: "3".into(),
-        state: "PENDING".into(),
-        reason: "DependencyNeverSatisfied".into(),
-        ..Job::default()
-    };
-    assert!(visible_jobs(vec![blocked.clone()], &Ledger::default(), 0, false).is_empty());
-    assert_eq!(
-        visible_jobs(vec![blocked.clone()], &Ledger::default(), 0, true),
-        vec![blocked]
-    );
-    let interactive = Job {
-        cluster: "cispa".into(),
-        id: "4".into(),
-        state: "RUNNING".into(),
-        interactive: true,
-        ..Job::default()
-    };
-    assert!(visible_jobs(vec![interactive.clone()], &Ledger::default(), 0, false).is_empty());
-    assert_eq!(
-        visible_jobs(vec![interactive.clone()], &Ledger::default(), 0, true),
-        vec![interactive]
-    );
-}
+mod history;
 
 #[test]
 fn shared_job_cache_round_trips_and_invalidates() {

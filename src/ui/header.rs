@@ -2,17 +2,14 @@ const HEADER_CELL_WIDTH: usize = 25;
 
 fn header_lines(
     manage: bool,
-    history: u8,
+    history: HistoryMode,
     auto_add: bool,
     blocked: bool,
     log_warnings: bool,
     cluster: &str,
     blocked_count: usize,
 ) -> Vec<String> {
-    let mode = ["● LIVE ≤2m", "OLD ≤20m", "ARCHIVE"]
-        .get(history as usize)
-        .copied()
-        .unwrap_or("ARCHIVE");
+    let mode = history.label();
     let cluster = if matches!(cluster, "all" | "both") {
         "ALL"
     } else {
@@ -31,8 +28,11 @@ fn header_lines(
         grid_row(
             "Views",
             &[
-                chip("Recent", if history == 1 { "ON" } else { "OFF" }),
-                chip("Archive", if history == 2 { "ON" } else { "OFF" }),
+                chip("Window", history.label()),
+                chip(
+                    "Archive",
+                    if history.scheduler_archive() { "ON" } else { "OFF" },
+                ),
                 chip(
                     "Blocked",
                     &format!(
@@ -68,7 +68,7 @@ fn header_lines(
 fn picker_header_lines(
     width: u16,
     manage: bool,
-    history: u8,
+    history: HistoryMode,
     auto_add: bool,
     blocked: bool,
     log_warnings: bool,
@@ -86,10 +86,7 @@ fn picker_header_lines(
             blocked_count,
         );
     }
-    let mode = ["LIVE ≤2m", "OLD ≤20m", "ARCHIVE"]
-        .get(history as usize)
-        .copied()
-        .unwrap_or("ARCHIVE");
+    let mode = history.label();
     let cluster = if matches!(cluster, "all" | "both") {
         "ALL"
     } else {
@@ -102,9 +99,8 @@ fn picker_header_lines(
             if auto_add { "ON" } else { "OFF" }
         ),
         format!(
-            "[ RECENT {} ]  [ ARCHIVE {} ]  [ BLOCKED {blocked_count} {} ]  [ WARNINGS {} ]",
-            if history == 1 { "ON" } else { "OFF" },
-            if history == 2 { "ON" } else { "OFF" },
+            "[ WINDOW {mode} ]  [ ARCHIVE {} ]  [ BLOCKED {blocked_count} {} ]  [ WARNINGS {} ]",
+            if history.scheduler_archive() { "ON" } else { "OFF" },
             if blocked { "SHOWN" } else { "HIDDEN" },
             if log_warnings { "SHOWN" } else { "HIDDEN" }
         ),

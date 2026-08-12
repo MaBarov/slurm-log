@@ -232,6 +232,12 @@ wait_text "$main_session" 'job-499'
 tmux_test send-keys -t "$main_session" b
 wait_text "$main_session" 'Blocked and interactive jobs shown'
 wait_text "$main_session" blocked-job
+# Active blocked jobs cannot be dismissed; the key produces explicit feedback
+# and must not mutate the tracking ledger.
+tmux_test send-keys -t "$main_session" / blocked-job Enter d
+wait_text "$main_session" 'Only finished live jobs can be dismissed'
+grep -F '"dismissed":{}' "$state" >/dev/null
+tmux_test send-keys -t "$main_session" Escape
 tmux_test send-keys -t "$main_session" b
 wait_text "$main_session" 'Blocked and interactive jobs hidden'
 tmux_test send-keys -t "$main_session" w
@@ -250,26 +256,44 @@ wait_text "$main_session" 'Auto-add disabled'
 grep -F '"autoAddDefault":false' "$state" >/dev/null
 tmux_test send-keys -t "$main_session" r
 wait_text "$main_session" 'Scheduler refreshed'
+# `o` cycles every requested history horizon and returns to the live view.
 tmux_test send-keys -t "$main_session" o
-wait_text "$main_session" 'Recent completed jobs shown'
+wait_text "$main_session" 'History window: last 2 hours'
 wait_text "$main_session" alpha-complete
 tmux_test send-keys -t "$main_session" o
-wait_text "$main_session" 'Recent completed jobs hidden'
-tmux_test send-keys -t "$main_session" a
-wait_text "$main_session" 'Accounting archive shown'
-wait_text "$main_session" alpha-complete
+wait_text "$main_session" 'History window: last 12 hours'
+tmux_test send-keys -t "$main_session" o
+wait_text "$main_session" 'History window: last 1 day'
+tmux_test send-keys -t "$main_session" o
+wait_text "$main_session" 'History window: last 1 week'
+tmux_test send-keys -t "$main_session" o
+wait_text "$main_session" 'All accounting history shown'
+tmux_test send-keys -t "$main_session" o
+wait_text "$main_session" 'Live jobs shown'
 
-# Dismiss targets the filtered terminal job and persists it in the ledger.
+# The direct archive toggle is read-only: `d` neither hides the row nor writes
+# a dismissal. Returning live restores the normal finished-job action.
+tmux_test send-keys -t "$main_session" a
+wait_text "$main_session" 'All accounting history shown'
+wait_text "$main_session" alpha-complete
 tmux_test send-keys -t "$main_session" / alpha-complete Enter
 wait_text "$main_session" 'search="alpha-complete"'
 tmux_test send-keys -t "$main_session" d
+wait_text "$main_session" 'Dismissal is unavailable in history/archive views'
+wait_text "$main_session" alpha-complete
+grep -F '"dismissed":{}' "$state" >/dev/null
+tmux_test send-keys -t "$main_session" Escape a
+wait_text "$main_session" 'Live jobs shown'
+
+# Dismiss targets the filtered terminal live job and persists it in the ledger.
+tmux_test send-keys -t "$main_session" / alpha-complete Enter d
+wait_text "$main_session" 'Dismissed 1 finished job(s)'
 attempt=0
 while screen "$main_session" | grep -E '[[:space:]]alpha[[:space:]]+700.*alpha-complete' >/dev/null; do
     attempt=$((attempt + 1)); test "$attempt" -lt 200; sleep 0.01
 done
 grep -F '"dismissed":{"alpha:700"' "$state" >/dev/null
-tmux_test send-keys -t "$main_session" Escape a
-wait_text "$main_session" 'Live jobs shown'
+tmux_test send-keys -t "$main_session" Escape
 
 # Details on a concrete job makes the expected live calls and returns to the
 # picker; `s` enters and exits the script bank without corrupting the screen.

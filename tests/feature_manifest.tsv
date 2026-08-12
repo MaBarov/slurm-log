@@ -60,7 +60,7 @@ picker.dismiss	picker_controls.sh
 picker.cancel_jobs	bank_actions.sh
 picker.open_bank	picker_controls.sh
 picker.cluster_tabs	cluster_tabs.sh
-picker.recent_toggle	picker_controls.sh
+picker.history_horizon_cycle	picker_controls.sh
 picker.archive_toggle	picker_controls.sh
 picker.blocked_toggle	picker_controls.sh
 picker.refresh	picker_controls.sh

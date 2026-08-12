@@ -222,6 +222,8 @@ PICKER ESSENTIALS
   s                           Open sbatch bank     x      Stop focused job
   /                           Search               b      Show blocked jobs
   d                           Dismiss finished     q      Quit
+  o                           Cycle 2h/12h/1d/1w/all history
+  a                           Toggle all history / live jobs
   ?                           Show the complete keyboard reference
 
 EXAMPLES

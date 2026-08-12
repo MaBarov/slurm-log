@@ -6,7 +6,7 @@
             notice = None;
             redraw = true;
         }
-        let refresh_interval = if history_mode == 2 {
+        let refresh_interval = if history_mode.scheduler_archive() {
             refresh_seconds.max(60)
         } else {
             refresh_seconds

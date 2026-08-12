@@ -5,7 +5,7 @@ pub fn pick(
     mut ledger: Ledger,
     initial: HashSet<String>,
     manage: bool,
-    mut history_mode: u8,
+    mut history_mode: HistoryMode,
     mut live_filter: Option<(String, String)>,
     auto_session: Option<String>,
     mut warnings: Vec<String>,

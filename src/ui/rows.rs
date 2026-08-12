@@ -86,7 +86,7 @@ fn restore_selected(
 fn refresh(
     config: &Config,
     live: &Option<(String, String)>,
-    history: u8,
+    history: HistoryMode,
     show_blocked: bool,
     blocked_count: &mut usize,
     force: bool,
@@ -98,9 +98,9 @@ fn refresh(
         return false;
     };
     let result = if force {
-        slurm::all_jobs_fresh(config, cluster, filter, history == 2)
+        slurm::all_jobs_fresh(config, cluster, filter, history.scheduler_archive())
     } else {
-        slurm::all_jobs(config, cluster, filter, history == 2)
+        slurm::all_jobs(config, cluster, filter, history.scheduler_archive())
     };
     if let Ok((fresh, state, fresh_warnings)) = result {
         let every_cluster = matches!(cluster.as_str(), "all" | "both");

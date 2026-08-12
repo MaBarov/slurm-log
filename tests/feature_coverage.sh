@@ -55,7 +55,7 @@ for feature in \
     picker.group.expand_collapse picker.selection.space_group \
     picker.selection.all_clear picker.selection.enter_exact picker.dismiss \
     picker.cancel_jobs picker.open_bank picker.cluster_tabs \
-    picker.recent_toggle picker.archive_toggle picker.blocked_toggle \
+    picker.history_horizon_cycle picker.archive_toggle picker.blocked_toggle \
     picker.refresh picker.search_apply_cancel_clear picker.notices_toggle \
     picker.warnings_toggle picker.details picker.auto_add_toggle \
     picker.reference_page picker.quit workspace.popup_j_a workspace.details_i \

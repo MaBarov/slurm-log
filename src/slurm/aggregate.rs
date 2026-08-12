@@ -218,10 +218,70 @@ fn recently_ended_at(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryMode {
+    Live,
+    Hours2,
+    Hours12,
+    Day1,
+    Week1,
+    All,
+}
+
+impl HistoryMode {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Live => Self::Hours2,
+            Self::Hours2 => Self::Hours12,
+            Self::Hours12 => Self::Day1,
+            Self::Day1 => Self::Week1,
+            Self::Week1 => Self::All,
+            Self::All => Self::Live,
+        }
+    }
+
+    pub const fn scheduler_archive(self) -> bool {
+        !matches!(self, Self::Live)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Live => "LIVE ≤2m",
+            Self::Hours2 => "LAST 2h",
+            Self::Hours12 => "LAST 12h",
+            Self::Day1 => "LAST 1d",
+            Self::Week1 => "LAST 1w",
+            Self::All => "ALL HISTORY",
+        }
+    }
+
+    pub const fn notice(self) -> &'static str {
+        match self {
+            Self::Live => "Live jobs shown",
+            Self::Hours2 => "History window: last 2 hours",
+            Self::Hours12 => "History window: last 12 hours",
+            Self::Day1 => "History window: last 1 day",
+            Self::Week1 => "History window: last 1 week",
+            Self::All => "All accounting history shown",
+        }
+    }
+
+    const fn terminal_horizon(self) -> Option<i64> {
+        match self {
+            Self::Live => Some(2 * 60),
+            Self::Hours2 => Some(2 * 60 * 60),
+            Self::Hours12 => Some(12 * 60 * 60),
+            Self::Day1 => Some(24 * 60 * 60),
+            Self::Week1 => Some(7 * 24 * 60 * 60),
+            Self::All => None,
+        }
+    }
+}
+
 pub fn visible_jobs(
     jobs: Vec<Job>,
     ledger: &Ledger,
-    history_mode: u8,
+    history_mode: HistoryMode,
     show_blocked: bool,
 ) -> Vec<Job> {
     let mut key = String::new();
@@ -232,8 +292,12 @@ pub fn visible_jobs(
             if job.blocked_category() && !show_blocked {
                 return false;
             }
-            if history_mode == 2 {
+            if history_mode == HistoryMode::All {
                 return true;
+            }
+            let horizon = history_mode.terminal_horizon().unwrap_or_default();
+            if history_mode != HistoryMode::Live {
+                return job.active() || recently_ended_at(job, horizon, now, local_offset);
             }
             job.write_key(&mut key);
             if ledger.dismissed.contains_key(&key) {
@@ -242,7 +306,6 @@ pub fn visible_jobs(
             if job.active() || !ledger.opened.contains_key(&key) {
                 return true;
             }
-            let horizon = if history_mode == 1 { 20 * 60 } else { 2 * 60 };
             recently_ended_at(job, horizon, now, local_offset)
         })
         .collect()
