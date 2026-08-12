@@ -54,35 +54,31 @@ impl Ledger {
         update(path, |state| {
             let mut changed = false;
             let now = now_string();
-            let baseline: HashSet<_> = state.baselined_clusters.iter().cloned().collect();
-            let mut newly: HashSet<_> = complete_clusters
-                .iter()
-                .filter(|cluster| !baseline.contains(*cluster))
-                .cloned()
-                .collect();
-            if state.tracking_schema != Some(SCHEMA) {
-                newly.extend(complete_clusters.iter().cloned());
+            let migrating = state.tracking_schema != Some(SCHEMA);
+            if migrating {
                 state.tracking_schema = Some(SCHEMA);
                 changed = true;
             }
+            let mut key = String::new();
             for job in jobs {
-                let key = job.key();
+                job.write_key(&mut key);
                 if !state.known.contains_key(&key) {
                     state.known.insert(key.clone(), now.clone());
                     changed = true;
                 }
-                if newly.contains(&job.cluster) && !job.active() && !state.opened.contains_key(&key)
-                {
+                let newly_complete_cluster = complete_clusters.contains(&job.cluster)
+                    && (migrating || !state.baselined_clusters.contains(&job.cluster));
+                if newly_complete_cluster && !job.active() && !state.opened.contains_key(&key) {
                     state.opened.insert(key.clone(), now.clone());
                     changed = true;
                 }
                 if job.interactive && !state.interactive_jobs.contains_key(&key) {
-                    state.interactive_jobs.insert(key, now.clone());
+                    state.interactive_jobs.insert(key.clone(), now.clone());
                     changed = true;
                 }
             }
             for cluster in complete_clusters {
-                if !baseline.contains(cluster) {
+                if !state.baselined_clusters.contains(cluster) {
                     state.baselined_clusters.push(cluster.clone());
                     changed = true;
                 }
@@ -436,7 +432,9 @@ mod tests {
         let before = fs::metadata(&path).unwrap().modified().unwrap();
         let started = std::time::Instant::now();
         Ledger::sync(&path, &jobs, &complete).unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_millis(250));
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_millis(250));
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+        eprintln!("no-op sync 20k jobs: {elapsed:?}");
     }
 }

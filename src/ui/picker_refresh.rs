@@ -32,23 +32,14 @@
             }
         }
         if catalog_dirty {
-            known_jobs.extend(jobs.iter().cloned().map(|job| (job.key(), job)));
+            remember_selected(&mut known_jobs, &jobs, &selected);
             catalog_dirty = false;
         }
         if manage && view_dirty {
             let active_cluster = live_filter
                 .as_ref()
                 .map_or("all", |(cluster, _)| cluster.as_str());
-            let every_cluster = matches!(active_cluster, "all" | "both");
-            let mut visible: HashSet<_> = jobs.iter().map(Job::key).collect();
-            for key in &selected {
-                let Some(job) = known_jobs.get(key) else {
-                    continue;
-                };
-                if (every_cluster || job.cluster == active_cluster) && visible.insert(key.clone()) {
-                    jobs.push(job.clone());
-                }
-            }
+            restore_selected(&mut jobs, &known_jobs, &selected, active_cluster);
         }
         if view_dirty {
             let needle = query.to_lowercase();

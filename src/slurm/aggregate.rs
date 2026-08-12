@@ -170,20 +170,36 @@ fn extend_unique(
 }
 
 fn restore_interactive_classification(jobs: &mut [Job], ledger: &Ledger) {
+    let mut key = String::new();
     for job in jobs {
-        if ledger.interactive_jobs.contains_key(&job.key()) {
+        job.write_key(&mut key);
+        if ledger.interactive_jobs.contains_key(&key) {
             job.interactive = true;
         }
     }
 }
 
+#[cfg(test)]
 pub fn recently_ended(job: &Job, seconds: i64) -> bool {
+    recently_ended_at(
+        job,
+        seconds,
+        OffsetDateTime::now_utc(),
+        UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC),
+    )
+}
+
+fn recently_ended_at(
+    job: &Job,
+    seconds: i64,
+    now: OffsetDateTime,
+    local_offset: UtcOffset,
+) -> bool {
     if job.ended.is_empty() || job.ended == "Unknown" || job.ended == "None" {
         return false;
     }
     let parsed = OffsetDateTime::parse(&job.ended, &Rfc3339).or_else(|_| {
-        let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-        let seconds = offset.whole_seconds();
+        let seconds = local_offset.whole_seconds();
         let sign = if seconds < 0 { '-' } else { '+' };
         let minutes = seconds.unsigned_abs() / 60;
         OffsetDateTime::parse(
@@ -197,7 +213,7 @@ pub fn recently_ended(job: &Job, seconds: i64) -> bool {
         )
     });
     parsed.is_ok_and(|ended| {
-        let age = (OffsetDateTime::now_utc() - ended).whole_seconds();
+        let age = (now - ended).whole_seconds();
         (0..=seconds).contains(&age)
     })
 }
@@ -208,19 +224,26 @@ pub fn visible_jobs(
     history_mode: u8,
     show_blocked: bool,
 ) -> Vec<Job> {
+    let mut key = String::new();
+    let now = OffsetDateTime::now_utc();
+    let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     jobs.into_iter()
         .filter(|job| {
             if job.blocked_category() && !show_blocked {
                 return false;
             }
-            let key = job.key();
-            if ledger.dismissed.contains_key(&key) && history_mode != 2 {
+            if history_mode == 2 {
+                return true;
+            }
+            job.write_key(&mut key);
+            if ledger.dismissed.contains_key(&key) {
                 return false;
             }
-            let history = history_mode == 2
-                || history_mode == 1 && recently_ended(job, 20 * 60)
-                || history_mode == 0 && recently_ended(job, 2 * 60);
-            job.active() || !ledger.opened.contains_key(&key) || history
+            if job.active() || !ledger.opened.contains_key(&key) {
+                return true;
+            }
+            let horizon = if history_mode == 1 { 20 * 60 } else { 2 * 60 };
+            recently_ended_at(job, horizon, now, local_offset)
         })
         .collect()
 }

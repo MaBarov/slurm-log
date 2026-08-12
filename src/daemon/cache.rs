@@ -22,20 +22,13 @@ fn invalidate_older_combined(
     }
 }
 
+#[cfg(test)]
 fn filtered_reply(reply: &Reply, cluster: &str, filter: &str) -> Reply {
     Reply {
         jobs: reply
             .jobs
             .iter()
-            .filter(|job| {
-                (matches!(cluster, "all" | "both") || job.cluster == cluster)
-                    && match filter {
-                        "running" => job.running(),
-                        "failed" => job.failed(),
-                        "blocked" => job.blocked_category(),
-                        _ => true,
-                    }
-            })
+            .filter(|job| job_in_view(job, cluster, filter))
             .cloned()
             .collect(),
         ledger: reply.ledger.clone(),
@@ -43,6 +36,50 @@ fn filtered_reply(reply: &Reply, cluster: &str, filter: &str) -> Reply {
         error: reply.error.clone(),
         details: reply.details.clone(),
     }
+}
+
+fn job_in_view(job: &Job, cluster: &str, filter: &str) -> bool {
+    (matches!(cluster, "all" | "both") || job.cluster == cluster)
+        && match filter {
+            "running" => job.running(),
+            "failed" => job.failed(),
+            "blocked" => job.blocked_category(),
+            _ => true,
+        }
+}
+
+#[derive(Serialize)]
+struct BorrowedReply<'a> {
+    jobs: Vec<&'a Job>,
+    ledger: &'a Ledger,
+    warnings: &'a [String],
+    error: &'a Option<String>,
+    details: &'a Option<JobDetails>,
+}
+
+fn encode_filtered_reply(reply: &Reply, cluster: &str, filter: &str) -> Result<Vec<u8>> {
+    let jobs = reply
+        .jobs
+        .iter()
+        .filter(|job| job_in_view(job, cluster, filter))
+        .collect();
+    encode_frame(&BorrowedReply {
+        jobs,
+        ledger: &reply.ledger,
+        warnings: &reply.warnings,
+        error: &reply.error,
+        details: &reply.details,
+    })
+}
+
+fn write_filtered_reply(
+    stream: &mut UnixStream,
+    reply: &Reply,
+    cluster: &str,
+    filter: &str,
+) -> Result<()> {
+    stream.write_all(&encode_filtered_reply(reply, cluster, filter)?)?;
+    Ok(())
 }
 
 fn start_refresh_loop(config: Config, cache: SharedCache) {
@@ -132,11 +169,13 @@ fn write_reply(stream: &mut UnixStream, reply: &Reply) -> Result<()> {
 }
 
 fn encode_frame(value: &impl Serialize) -> Result<Vec<u8>> {
-    let payload = rmp_serde::to_vec(value)?;
-    let length = u32::try_from(payload.len()).context("daemon message too large")?;
-    let mut frame = Vec::with_capacity(payload.len() + 4);
-    frame.extend_from_slice(&length.to_le_bytes());
-    frame.extend_from_slice(&payload);
+    // Reserve the header and encode directly behind it. The old two-vector
+    // path copied every large archive payload once after serialization.
+    let mut frame = Vec::with_capacity(4 * 1024);
+    frame.extend_from_slice(&[0_u8; 4]);
+    rmp_serde::encode::write(&mut frame, value)?;
+    let length = u32::try_from(frame.len() - 4).context("daemon message too large")?;
+    frame[..4].copy_from_slice(&length.to_le_bytes());
     Ok(frame)
 }
 

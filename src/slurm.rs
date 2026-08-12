@@ -4,6 +4,7 @@ use std::{
     collections::HashSet,
     fs,
     fs::OpenOptions,
+    io::{BufWriter, Write},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     thread,
@@ -27,6 +28,8 @@ const QUEUE_CACHE_TTL: Duration = Duration::from_secs(15);
 const RECENT_CACHE_TTL: Duration = Duration::from_secs(60);
 const ARCHIVE_CACHE_TTL: Duration = Duration::from_secs(60);
 const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CACHE_JOBS: usize = 1_000_000;
+const MAX_INITIAL_JOBS: usize = 100_000;
 const DEFAULT_ARCHIVE_DAYS: i64 = 365;
 
 pub fn validate_query(cluster: &str, filter: &str) -> Result<()> {
@@ -50,6 +53,14 @@ fn cache_path(config: &Config, name: &str) -> PathBuf {
         .state_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
+        .join(format!("{name}-cache.msgpack"))
+}
+
+fn legacy_cache_path(config: &Config, name: &str) -> PathBuf {
+    config
+        .state_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
         .join(format!("{name}-cache.json"))
 }
 
@@ -69,7 +80,55 @@ fn cached_jobs(path: &Path, ttl: Duration) -> Option<Vec<Job>> {
     if SystemTime::now().duration_since(modified).ok()? > ttl {
         return None;
     }
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
+    let bytes = fs::read(path).ok()?;
+    (msgpack_sequence_len(&bytes)? <= MAX_CACHE_JOBS).then(|| {
+        rmp_serde::from_slice::<BoundedJobs>(&bytes)
+            .ok()
+            .map(|jobs| jobs.0)
+    })?
+}
+
+struct BoundedJobs(Vec<Job>);
+
+impl<'de> serde::Deserialize<'de> for BoundedJobs {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct JobsVisitor;
+        impl<'de> serde::de::Visitor<'de> for JobsVisitor {
+            type Value = BoundedJobs;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a bounded job sequence")
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let initial = sequence.size_hint().unwrap_or(0).min(MAX_INITIAL_JOBS);
+                let mut jobs = Vec::with_capacity(initial);
+                while let Some(job) = sequence.next_element()? {
+                    if jobs.len() == MAX_CACHE_JOBS {
+                        return Err(serde::de::Error::custom("job cache exceeds item limit"));
+                    }
+                    jobs.push(job);
+                }
+                Ok(BoundedJobs(jobs))
+            }
+        }
+        deserializer.deserialize_seq(JobsVisitor)
+    }
+}
+
+fn msgpack_sequence_len(bytes: &[u8]) -> Option<usize> {
+    match *bytes.first()? {
+        marker @ 0x90..=0x9f => Some(usize::from(marker & 0x0f)),
+        0xdc => Some(u16::from_be_bytes(bytes.get(1..3)?.try_into().ok()?) as usize),
+        0xdd => Some(u32::from_be_bytes(bytes.get(1..5)?.try_into().ok()?) as usize),
+        _ => None,
+    }
 }
 
 fn query_lock(path: &Path) -> Result<fs::File> {
@@ -99,7 +158,11 @@ fn store_jobs(path: &Path, jobs: &[Job]) {
         .write(true)
         .mode(0o600)
         .open(&temporary)
-        .and_then(|file| serde_json::to_writer(file, jobs).map_err(std::io::Error::other))
+        .and_then(|file| {
+            let mut writer = BufWriter::with_capacity(256 * 1024, file);
+            rmp_serde::encode::write(&mut writer, jobs).map_err(std::io::Error::other)?;
+            writer.flush()
+        })
         .is_ok()
     {
         let _ = fs::rename(temporary, path);
@@ -112,15 +175,17 @@ pub fn invalidate_caches(config: &Config) {
     // Remove pre-configurable-cluster cache names during rolling upgrades.
     for legacy in ["queue-sprint", "queue-cispa", "recent", "archive"] {
         let _ = fs::remove_file(cache_path(config, legacy));
+        let _ = fs::remove_file(legacy_cache_path(config, legacy));
     }
     for cluster in &config.clusters {
         for prefix in ["queue", "queue-v2", "recent", "archive"] {
-            let _ = fs::remove_file(cache_path(config, &format!("{prefix}-{}", cluster.name)));
+            let name = format!("{prefix}-{}", cluster.name);
+            let _ = fs::remove_file(cache_path(config, &name));
+            let _ = fs::remove_file(legacy_cache_path(config, &name));
         }
-        let _ = fs::remove_file(cache_path(
-            config,
-            &format!("archive-{}-{}d", cluster.name, archive_horizon_days()),
-        ));
+        let name = format!("archive-{}-{}d", cluster.name, archive_horizon_days());
+        let _ = fs::remove_file(cache_path(config, &name));
+        let _ = fs::remove_file(legacy_cache_path(config, &name));
     }
 }
 
@@ -143,38 +208,42 @@ pub(crate) fn scheduler_text(
 }
 
 pub fn parse_queue(input: &str, cluster: &str) -> Vec<Job> {
-    input
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.splitn(9, '|').map(str::trim);
-            let id = fields.next()?;
-            let state = fields.next()?;
-            let name = fields.next()?;
-            let elapsed = fields.next()?;
-            if !valid_job_id(id) {
-                return None;
-            }
-            let reason = fields.next().unwrap_or("");
-            let partition = fields.next().unwrap_or("");
-            let start_time = fields.next().unwrap_or("");
-            let priority = fields.next().unwrap_or("");
-            let command = fields.next().unwrap_or("");
-            Some(Job {
-                cluster: cluster.into(),
-                id: id.into(),
-                state: state.into(),
-                name: name.into(),
-                elapsed: elapsed.into(),
-                reason: reason.into(),
-                ended: String::new(),
-                partition: partition.into(),
-                start_time: start_time.into(),
-                priority: priority.into(),
-                interactive: interactive_command(command),
-                ..Job::default()
-            })
-        })
-        .collect()
+    let mut jobs = Vec::with_capacity(line_count(input).min(MAX_INITIAL_JOBS));
+    for line in input.lines() {
+        let mut fields = line.splitn(9, '|').map(str::trim);
+        let Some((id, state, name, elapsed)) = fields
+            .next()
+            .zip(fields.next())
+            .zip(fields.next())
+            .zip(fields.next())
+            .map(|(((id, state), name), elapsed)| (id, state, name, elapsed))
+        else {
+            continue;
+        };
+        if !valid_job_id(id) {
+            continue;
+        }
+        let reason = fields.next().unwrap_or("");
+        let partition = fields.next().unwrap_or("");
+        let start_time = fields.next().unwrap_or("");
+        let priority = fields.next().unwrap_or("");
+        let command = fields.next().unwrap_or("");
+        jobs.push(Job {
+            cluster: cluster.into(),
+            id: id.into(),
+            state: state.into(),
+            name: name.into(),
+            elapsed: elapsed.into(),
+            reason: reason.into(),
+            ended: String::new(),
+            partition: partition.into(),
+            start_time: start_time.into(),
+            priority: priority.into(),
+            interactive: interactive_command(command),
+            ..Job::default()
+        });
+    }
+    jobs
 }
 
 fn interactive_command(command: &str) -> bool {
@@ -185,34 +254,47 @@ fn interactive_command(command: &str) -> bool {
 }
 
 pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {
+    let mut jobs = Vec::with_capacity(line_count(input).min(MAX_INITIAL_JOBS));
+    for line in input.lines() {
+        let mut fields = line.splitn(9, '|').map(str::trim);
+        let Some((id, state, name, elapsed, ended)) = fields
+            .next()
+            .zip(fields.next())
+            .zip(fields.next())
+            .zip(fields.next())
+            .zip(fields.next())
+            .map(|((((id, state), name), elapsed), ended)| (id, state, name, elapsed, ended))
+        else {
+            continue;
+        };
+        if !valid_job_id(id) {
+            continue;
+        }
+        jobs.push(Job {
+            cluster: cluster.into(),
+            id: id.into(),
+            state: state.into(),
+            name: name.into(),
+            elapsed: elapsed.into(),
+            reason: String::new(),
+            ended: ended.into(),
+            exit_code: fields.next().unwrap_or("").into(),
+            max_rss: fields.next().unwrap_or("").into(),
+            alloc_tres: fields.next().unwrap_or("").into(),
+            partition: fields.next().unwrap_or("").into(),
+            ..Job::default()
+        });
+    }
+    jobs
+}
+
+fn line_count(input: &str) -> usize {
     input
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.splitn(9, '|').map(str::trim);
-            let id = fields.next()?;
-            let state = fields.next()?;
-            let name = fields.next()?;
-            let elapsed = fields.next()?;
-            let ended = fields.next()?;
-            if !valid_job_id(id) {
-                return None;
-            }
-            Some(Job {
-                cluster: cluster.into(),
-                id: id.into(),
-                state: state.into(),
-                name: name.into(),
-                elapsed: elapsed.into(),
-                reason: String::new(),
-                ended: ended.into(),
-                exit_code: fields.next().unwrap_or("").into(),
-                max_rss: fields.next().unwrap_or("").into(),
-                alloc_tres: fields.next().unwrap_or("").into(),
-                partition: fields.next().unwrap_or("").into(),
-                ..Job::default()
-            })
-        })
-        .collect()
+        .as_bytes()
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count()
+        + usize::from(!input.is_empty() && !input.ends_with('\n'))
 }
 
 pub fn queued(config: &Config, cluster: &str) -> Result<Vec<Job>> {

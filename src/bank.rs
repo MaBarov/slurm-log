@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, HashSet},
     fs::{self, OpenOptions},
     hash::{DefaultHasher, Hash, Hasher},
     io::{self, BufReader, BufWriter, IsTerminal, Write},
@@ -326,6 +326,7 @@ pub fn run_scan_worker(arguments: &[String]) -> Result<()> {
 }
 
 include!("bank/catalog.rs");
+include!("bank/index.rs");
 include!("bank/ui.rs");
 
 #[cfg(test)]

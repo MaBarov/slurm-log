@@ -34,86 +34,6 @@ fn cluster_tabs(config: &Config, selected: usize) -> String {
         .join("  ")
 }
 
-fn rows(
-    banks: &[LoadedBank],
-    scripts: &[Script],
-    expanded: &HashSet<Expanded>,
-    query: &str,
-    cluster: &str,
-) -> Vec<BankRow> {
-    if !query.is_empty() {
-        let needle = query.to_lowercase();
-        return scripts
-            .iter()
-            .enumerate()
-            .filter(|(_, script)| {
-                supports_cluster(script, cluster)
-                    && format!("{}/{}", script.bank, script.relative.display())
-                        .to_lowercase()
-                        .contains(&needle)
-            })
-            .map(|(index, _)| BankRow::File(index, 1))
-            .collect();
-    }
-    let mut result = Vec::new();
-    for (bank_index, bank) in banks.iter().enumerate() {
-        let eligible: Vec<_> = (bank.first..bank.last)
-            .filter(|&index| supports_cluster(&scripts[index], cluster))
-            .collect();
-        if eligible.is_empty() {
-            continue;
-        }
-        let bank_open = expanded.contains(&Expanded::Bank(bank_index));
-        result.push(BankRow::Bank(bank_index, bank_open, eligible.len()));
-        if !bank_open {
-            continue;
-        }
-        let mut directories = BTreeSet::new();
-        let mut children: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
-        for index in eligible {
-            let script = &scripts[index];
-            let direct_parent = script.relative.parent().unwrap_or_else(|| Path::new(""));
-            children
-                .entry(direct_parent.to_path_buf())
-                .or_default()
-                .push(index);
-            let mut parent = script.relative.parent();
-            while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
-                directories.insert(path.to_path_buf());
-                parent = path.parent();
-            }
-        }
-        let visible = |path: &Path| {
-            path.ancestors()
-                .skip(1)
-                .filter(|ancestor| !ancestor.as_os_str().is_empty())
-                .all(|ancestor| {
-                    expanded.contains(&Expanded::Directory(bank_index, ancestor.to_path_buf()))
-                })
-        };
-        for directory in directories {
-            let key = Expanded::Directory(bank_index, directory.clone());
-            if visible(&directory) {
-                result.push(BankRow::Directory(
-                    bank_index,
-                    directory.clone(),
-                    directory.components().count() + 1,
-                    expanded.contains(&key),
-                ));
-            }
-            if expanded.contains(&key) && visible(&directory) {
-                for &index in children.get(&directory).into_iter().flatten() {
-                    result.push(BankRow::File(index, directory.components().count() + 1));
-                }
-            }
-        }
-        for &index in children.get(Path::new("")).into_iter().flatten() {
-            result.push(BankRow::File(index, 1));
-        }
-    }
-    result
-}
-
 pub fn run(config: &Config) -> Result<Option<Job>> {
     let (mut banks, mut scripts, mut warnings) = scan_all(config)?;
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -141,14 +61,16 @@ pub fn run(config: &Config) -> Result<Option<Job>> {
     let mut current = Vec::new();
     let mut visible_scripts = 0_usize;
     let mut view_dirty = true;
+    let mut index = BankIndex::new(
+        &banks,
+        &scripts,
+        config.clusters.iter().map(|cluster| cluster.name.as_str()),
+    );
     loop {
         if view_dirty {
             let cluster = &config.clusters[selected_cluster].name;
-            current = rows(&banks, &scripts, &expanded, &query, cluster);
-            visible_scripts = scripts
-                .iter()
-                .filter(|script| supports_cluster(script, cluster))
-                .count();
+            current = index.rows(&scripts, &expanded, &query, cluster);
+            visible_scripts = index.visible_scripts(cluster);
             view_dirty = false;
         }
         focus = focus.min(current.len().saturating_sub(1));
@@ -214,6 +136,11 @@ pub fn run(config: &Config) -> Result<Option<Job>> {
             }
             KeyCode::Char('r') => {
                 (banks, scripts, warnings) = scan_all_fresh(config)?;
+                index = BankIndex::new(
+                    &banks,
+                    &scripts,
+                    config.clusters.iter().map(|cluster| cluster.name.as_str()),
+                );
                 expanded.extend((0..banks.len()).map(Expanded::Bank));
                 view_dirty = true;
             }

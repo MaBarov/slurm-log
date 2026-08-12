@@ -331,6 +331,60 @@ fn binary_protocol_handles_large_archive_within_budget() {
     let started = Instant::now();
     let encoded = encode_reply(&reply).unwrap();
     let payload: Reply = rmp_serde::from_slice(&encoded[4..]).unwrap();
+    let elapsed = started.elapsed();
     assert_eq!(payload.jobs.len(), 10_000);
-    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(elapsed < Duration::from_millis(100));
+    eprintln!("binary round trip 10k jobs: {elapsed:?}");
+}
+
+#[test]
+#[ignore = "release-mode performance budget"]
+fn borrowed_daemon_reply_avoids_cloning_large_ledger() {
+    let jobs: Vec<_> = (0..20_000)
+        .map(|id| Job {
+            cluster: if id % 2 == 0 { "sprint" } else { "cispa" }.into(),
+            id: id.to_string(),
+            state: if id % 20 == 0 {
+                "RUNNING".into()
+            } else {
+                "COMPLETED".into()
+            },
+            name: "archive-job".into(),
+            ..Job::default()
+        })
+        .collect();
+    let reply = Reply {
+        ledger: Ledger {
+            known: jobs
+                .iter()
+                .map(|job| (job.key(), "2026-08-12T00:00:00Z".into()))
+                .collect(),
+            ..Ledger::default()
+        },
+        jobs,
+        ..empty_reply()
+    };
+    let started = Instant::now();
+    let borrowed = encode_filtered_reply(&reply, "sprint", "running").unwrap();
+    let borrowed_elapsed = started.elapsed();
+    let decoded: Reply = rmp_serde::from_slice(&borrowed[4..]).unwrap();
+    assert_eq!(decoded.jobs.len(), 1_000);
+    assert_eq!(decoded.ledger.known.len(), 20_000);
+
+    let baseline_started = Instant::now();
+    let owned = filtered_reply(&reply, "sprint", "running");
+    let baseline = encode_reply(&owned).unwrap();
+    let baseline_elapsed = baseline_started.elapsed();
+    assert_eq!(
+        rmp_serde::from_slice::<Reply>(&baseline[4..])
+            .unwrap()
+            .jobs
+            .len(),
+        1_000
+    );
+    assert!(borrowed_elapsed < Duration::from_millis(150));
+    assert!(borrowed_elapsed < baseline_elapsed);
+    eprintln!(
+        "daemon filtered reply: borrowed={borrowed_elapsed:?}, clone-first={baseline_elapsed:?}"
+    );
 }

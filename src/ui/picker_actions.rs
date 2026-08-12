@@ -92,10 +92,12 @@
             }
             KeyCode::Char(' ') if !rows.is_empty() => {
                 toggle(&mut selected, &jobs, &rows[focus].members);
+                remember_selected(&mut known_jobs, &jobs, &selected);
                 selection_dirty = true;
             }
             KeyCode::Char('v') => {
                 selected.extend(indices.iter().map(|&index| jobs[index].key()));
+                remember_selected(&mut known_jobs, &jobs, &selected);
                 selection_dirty = true;
             }
             KeyCode::Char('c') => {
@@ -368,7 +370,7 @@
                     toggle(&mut selected, &jobs, &rows[focus].members);
                 }
                 if !selected.is_empty() {
-                    known_jobs.extend(jobs.iter().cloned().map(|job| (job.key(), job)));
+                    remember_selected(&mut known_jobs, &jobs, &selected);
                     let mut chosen: Vec<_> = selected
                         .iter()
                         .filter_map(|key| known_jobs.get(key).cloned())

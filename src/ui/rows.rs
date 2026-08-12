@@ -45,6 +45,43 @@ fn row_key(row: &Row, jobs: &[Job]) -> String {
         .unwrap_or_else(|| format!("group:{}", row.name))
 }
 
+fn remember_selected(
+    known: &mut HashMap<String, Job>,
+    jobs: &[Job],
+    selected: &HashSet<String>,
+) {
+    let mut key = String::new();
+    for job in jobs {
+        job.write_key(&mut key);
+        if selected.contains(&key) {
+            known.insert(key.clone(), job.clone());
+        }
+    }
+}
+
+fn restore_selected(
+    jobs: &mut Vec<Job>,
+    known: &HashMap<String, Job>,
+    selected: &HashSet<String>,
+    active_cluster: &str,
+) {
+    let every_cluster = matches!(active_cluster, "all" | "both");
+    let visible: HashSet<_> = jobs
+        .iter()
+        .map(|job| (job.cluster.as_str(), job.id.as_str()))
+        .collect();
+    let additions: Vec<_> = selected
+        .iter()
+        .filter_map(|key| {
+            let job = known.get(key)?;
+            let in_cluster = every_cluster || job.cluster == active_cluster;
+            (in_cluster && !visible.contains(&(job.cluster.as_str(), job.id.as_str())))
+                .then(|| job.clone())
+        })
+        .collect();
+    jobs.extend(additions);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn refresh(
     config: &Config,

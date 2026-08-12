@@ -27,7 +27,16 @@ pub struct Job {
 
 impl Job {
     pub fn key(&self) -> String {
-        format!("{}:{}", self.cluster, self.id)
+        let mut key = String::with_capacity(self.cluster.len() + self.id.len() + 1);
+        self.write_key(&mut key);
+        key
+    }
+    pub fn write_key(&self, key: &mut String) {
+        key.clear();
+        key.reserve(self.cluster.len() + self.id.len() + 1);
+        key.push_str(&self.cluster);
+        key.push(':');
+        key.push_str(&self.id);
     }
     pub fn active(&self) -> bool {
         self.state.starts_with("PENDING") || self.state.starts_with("RUNNING")
@@ -122,11 +131,12 @@ pub struct Pane {
 }
 
 pub fn valid_job_id(id: &str) -> bool {
-    let parts: Vec<_> = id.split('_').collect();
-    (parts.len() == 1 || parts.len() == 2)
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    let mut parts = id.split('_');
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    digits(first) && parts.next().is_none_or(digits) && parts.next().is_none()
 }
 
 #[cfg(test)]
@@ -252,6 +262,9 @@ mod tests {
             ..Job::default()
         };
         assert_eq!(job.key(), "alpha:42");
+        let mut reusable = String::from("old allocation");
+        job.write_key(&mut reusable);
+        assert_eq!(reusable, "alpha:42");
         assert_eq!(job.insight(), "");
         assert!(!job.blocked_category());
         job.interactive = true;

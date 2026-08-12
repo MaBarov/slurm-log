@@ -328,8 +328,10 @@ fn loads_twenty_thousand_cached_scripts_within_budget() {
     store_bank_cache(&config, &root, &payload);
     let started = Instant::now();
     let cached = load_bank_cache(&config, &root).unwrap();
+    let elapsed = started.elapsed();
     assert_eq!(cached.scripts.len(), 20_000);
-    assert!(started.elapsed() < Duration::from_millis(150));
+    assert!(elapsed < Duration::from_millis(150));
+    eprintln!("load 20k cached scripts: {elapsed:?}");
 }
 
 #[test]
@@ -354,7 +356,13 @@ fn builds_twenty_thousand_bank_rows_within_budget() {
         first: 0,
         last: scripts.len(),
     }];
+    let index_started = std::time::Instant::now();
+    let index = BankIndex::new(&banks, &scripts, ["local"]);
+    let index_elapsed = index_started.elapsed();
     let started = std::time::Instant::now();
-    assert_eq!(rows(&banks, &scripts, &expanded, "", "local").len(), 20_101);
-    assert!(started.elapsed() < std::time::Duration::from_millis(100));
+    assert_eq!(index.rows(&scripts, &expanded, "", "local").len(), 20_101);
+    let elapsed = started.elapsed();
+    assert!(index_elapsed < std::time::Duration::from_millis(100));
+    assert!(elapsed < std::time::Duration::from_millis(20));
+    eprintln!("index 20k scripts once: {index_elapsed:?}; rebuild rows: {elapsed:?}");
 }

@@ -213,8 +213,10 @@ fn searches_one_hundred_thousand_jobs_within_budget() {
         .iter()
         .filter(|job| job_matches(job, "experiment-499"))
         .count();
+    let elapsed = started.elapsed();
     assert_eq!(matches, 200);
-    assert!(started.elapsed() < Duration::from_millis(150));
+    assert!(elapsed < Duration::from_millis(150));
+    eprintln!("search 100k jobs: {elapsed:?}");
 }
 
 #[test]
@@ -351,6 +353,25 @@ fn grouping_order_is_deterministic_for_equal_statuses() {
 }
 
 #[test]
+fn selected_pane_catalog_is_sparse_and_restores_cross_cluster_jobs() {
+    let mut local = job("1", "local");
+    local.cluster = "sprint".into();
+    let mut remote = job("2", "remote");
+    remote.cluster = "cispa".into();
+    let selected = HashSet::from([local.key(), remote.key()]);
+    let mut known = HashMap::new();
+    remember_selected(&mut known, &[local.clone(), remote.clone()], &selected);
+    assert_eq!(known.len(), 2);
+
+    let mut visible = vec![local.clone()];
+    restore_selected(&mut visible, &known, &selected, "sprint");
+    assert_eq!(visible, [local]);
+    restore_selected(&mut visible, &known, &selected, "all");
+    assert_eq!(visible.len(), 2);
+    assert_eq!(visible.iter().filter(|job| job.id == "1").count(), 1);
+}
+
+#[test]
 #[ignore = "release-mode performance budget"]
 fn groups_twenty_thousand_archive_jobs_within_budget() {
     let jobs: Vec<_> = (0..20_000)
@@ -359,6 +380,34 @@ fn groups_twenty_thousand_archive_jobs_within_budget() {
     let indices: Vec<_> = (0..jobs.len()).collect();
     let started = Instant::now();
     let rows = grouped_rows(&jobs, &indices, &HashSet::new());
+    let elapsed = started.elapsed();
     assert_eq!(rows.len(), 200);
-    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(elapsed < Duration::from_millis(100));
+    eprintln!("group 20k jobs: {elapsed:?}");
+}
+
+#[test]
+#[ignore = "release-mode performance budget"]
+fn pane_catalog_retains_only_selected_archive_jobs() {
+    let jobs: Vec<_> = (0..50_000)
+        .map(|id| job(&id.to_string(), &format!("experiment-{}", id % 200)))
+        .collect();
+    let selected: HashSet<_> = (0..10).map(|index| jobs[index * 5_000].key()).collect();
+    let started = Instant::now();
+    let mut known = HashMap::with_capacity(selected.len());
+    remember_selected(&mut known, &jobs, &selected);
+    let optimized = started.elapsed();
+    assert_eq!(known.len(), 10);
+
+    let baseline_started = Instant::now();
+    let baseline: HashMap<_, _> = jobs.iter().cloned().map(|job| (job.key(), job)).collect();
+    let baseline_elapsed = baseline_started.elapsed();
+    assert_eq!(baseline.len(), jobs.len());
+    assert!(optimized < Duration::from_millis(30));
+    assert!(optimized < baseline_elapsed);
+
+    let mut visible = vec![known.values().next().unwrap().clone()];
+    restore_selected(&mut visible, &known, &selected, "all");
+    assert_eq!(visible.len(), selected.len());
+    eprintln!("pane catalog 50k jobs: selected-only={optimized:?}, clone-all={baseline_elapsed:?}");
 }

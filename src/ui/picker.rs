@@ -18,11 +18,11 @@ pub fn pick(
     let mut focus = 0usize;
     let mut selected = initial;
     // The pane manager's selection is workspace-wide, while cluster tabs are
-    // only views into that workspace. Keep the latest representation of every
-    // job we have seen so a selected pane can survive while its cluster is not
-    // the active tab and can still be returned to tmux on Enter.
-    let mut known_jobs: HashMap<String, Job> =
-        jobs.iter().cloned().map(|job| (job.key(), job)).collect();
+    // only views into that workspace. Retain metadata only for selected panes;
+    // cloning a full accounting archive here made opening Ctrl-b j scale with
+    // every historical job instead of the handful of open panes.
+    let mut known_jobs = HashMap::with_capacity(selected.len());
+    remember_selected(&mut known_jobs, &jobs, &selected);
     let mut expanded = HashSet::new();
     let mut query = String::new();
     let mut show_blocked = live_filter
