@@ -33,6 +33,8 @@ const FOLLOWER_SSH_OPTIONS: &[&str] = &[
     "-o",
     "ServerAliveCountMax=3",
 ];
+const FOLLOWER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const FOLLOWER_SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(15);
 
 fn alert(message: &str) {
     print!("\x07");
@@ -101,6 +103,7 @@ pub fn run(
     let interrupted = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, interrupted.clone())?;
     let mut absent = 0;
+    let mut next_scheduler_poll = Instant::now() + FOLLOWER_SCHEDULER_POLL_INTERVAL;
     loop {
         if interrupted.load(Ordering::Relaxed) {
             let _ = child.kill();
@@ -160,7 +163,12 @@ pub fn run(
             }
             return Ok(code);
         }
-        thread::sleep(Duration::from_secs(15));
+        let now = Instant::now();
+        if now < next_scheduler_poll {
+            thread::sleep(FOLLOWER_EXIT_POLL_INTERVAL.min(next_scheduler_poll - now));
+            continue;
+        }
+        next_scheduler_poll = now + FOLLOWER_SCHEDULER_POLL_INTERVAL;
         match slurm::queued(config, &job.cluster) {
             Ok(jobs) => {
                 let current = jobs.iter().find(|item| item.id == job.id);

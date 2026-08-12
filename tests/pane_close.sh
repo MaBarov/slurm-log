@@ -8,8 +8,10 @@ binary=$project_dir/target/release/slurm-log
 test_root=$(mktemp -d)
 session=slurm-log-close-test-$$
 socket=slurm-log-close-test-$$
+tmux_binary=$(command -v tmux)
+tmux_dir=$(dirname -- "$tmux_binary")
 tmux_test() {
-    tmux -L "$socket" "$@"
+    "$tmux_binary" -L "$socket" "$@"
 }
 fail_stage() {
     stage=$1
@@ -54,7 +56,7 @@ details_pane=$(tmux_test split-window -d -P -F '#{pane_id}' -t "$log_pane" \
     'while :; do sleep 60; done')
 tmux_test set-option -p -t "$details_pane" @slurm_log_detail_parent "$log_pane"
 tmux_test respawn-pane -k -t "$log_pane" \
-    env PATH="$fake_bin:/usr/local/bin:/usr/bin:/bin" \
+    env PATH="$fake_bin:$tmux_dir:/usr/local/bin:/usr/bin:/bin" \
     HOME="$test_root" \
     SLURM_LOG_LOCAL_USER=offline \
     SLURM_LOG_REMOTE_USER=offline \
@@ -67,8 +69,14 @@ attempt=0
 while :; do
     captured=$(tmux_test capture-pane -p -S -100 -t "$log_pane" 2>/dev/null || true)
     case "$captured" in *'Press Enter to close this pane.'*) break ;; esac
+    if [ "$(tmux_test display-message -p -t "$log_pane" '#{pane_dead}')" = 1 ]; then
+        fail_stage prompt-process-exited "Pane exited before reaching close prompt"
+    fi
     attempt=$((attempt + 1))
-    if [ "$attempt" -ge 1000 ]; then
+    # A loaded shared runner can take more than ten seconds to schedule a
+    # freshly spawned PTY process. Keep the wait bounded, but do not mistake
+    # runner contention for a product regression.
+    if [ "$attempt" -ge 3000 ]; then
         tmux_test list-panes -t "$session" \
             -F 'dead=#{pane_dead} status=#{pane_dead_status} command=#{pane_current_command}' >&2 || true
         fail_stage prompt "Pane never reached close prompt"
