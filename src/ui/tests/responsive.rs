@@ -198,6 +198,19 @@ fn verbose_footer_stays_on_one_row_and_prioritizes_blocked_status() {
 }
 
 #[test]
+fn footer_flattens_multiline_scheduler_errors() {
+    let warning = " | sprint: squeue: error: Problem talking to database\n\
+                   squeue: error: 'sprint' can't be reached\r\n\
+                   \u{1b}[31mcontroller unavailable\u{1b}[0m";
+    let line = footer_line(200, 0, 0, "", warning, "", 0, false);
+
+    assert!(line.contains("Problem talking to database squeue: error: 'sprint' can't be reached"));
+    assert!(line.contains("[31mcontroller unavailable[0m"));
+    assert!(!line.contains(char::is_control));
+    assert!(UnicodeWidthStr::width(line.as_str()) < 200);
+}
+
+#[test]
 fn footer_reserves_the_terminal_final_column_for_wrap_safety() {
     for width in [44, 80, 120] {
         let line = footer_line(
