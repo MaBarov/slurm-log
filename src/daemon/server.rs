@@ -28,11 +28,12 @@ fn run(config: &Config) -> Result<()> {
     });
     let cache: SharedCache = Arc::new(Mutex::new(HashMap::new()));
     let detail_cache: DetailCache = Arc::new(Mutex::new(HashMap::new()));
+    let log_cache: LogCache = Arc::new(Mutex::new(HashMap::new()));
     start_refresh_loop(config.clone(), Arc::clone(&cache));
     while let Ok(mut stream) = receiver.recv_timeout(IDLE_TIMEOUT) {
         let _ = stream.set_read_timeout(Some(CLIENT_TIMEOUT));
         let _ = stream.set_write_timeout(Some(CLIENT_TIMEOUT));
-        match handle_stream(config, &cache, &detail_cache, &mut stream) {
+        match handle_stream_with_logs(config, &cache, &detail_cache, &log_cache, &mut stream) {
             Ok(true) => break,
             Ok(false) => {}
             Err(error) => {
@@ -51,10 +52,11 @@ fn run(config: &Config) -> Result<()> {
     let _ = fs::remove_file(socket);
     Ok(())
 }
-fn handle_stream(
+fn handle_stream_with_logs(
     config: &Config,
     cache: &SharedCache,
     detail_cache: &DetailCache,
+    log_cache: &LogCache,
     stream: &mut UnixStream,
 ) -> Result<bool> {
     let request: Request = read_frame(stream)?;
@@ -74,6 +76,42 @@ fn handle_stream(
                 crate::details::fetch(config, &cluster, &id, previous)
             });
             write_reply(stream, &reply)?;
+            return Ok(false);
+        }
+        Request::LogMetadata { cluster, id } => {
+            let data = resolve_log_request(config, log_cache, &cluster, &id, LogRead::Metadata)?;
+            write_frame(stream, &data)?;
+            return Ok(false);
+        }
+        Request::LogWindow {
+            cluster,
+            id,
+            max_bytes,
+        } => {
+            let data = resolve_log_request(
+                config,
+                log_cache,
+                &cluster,
+                &id,
+                LogRead::Window(max_bytes),
+            )?;
+            write_frame(stream, &data)?;
+            return Ok(false);
+        }
+        Request::LogRead {
+            cluster,
+            id,
+            start,
+            max_bytes,
+        } => {
+            let data = resolve_log_request(
+                config,
+                log_cache,
+                &cluster,
+                &id,
+                LogRead::Range(start, max_bytes),
+            )?;
+            write_frame(stream, &data)?;
             return Ok(false);
         }
         Request::Query {
@@ -155,6 +193,17 @@ fn handle_stream(
     };
     write_reply(stream, &reply)?;
     Ok(false)
+}
+
+#[cfg(test)]
+fn handle_stream(
+    config: &Config,
+    cache: &SharedCache,
+    detail_cache: &DetailCache,
+    stream: &mut UnixStream,
+) -> Result<bool> {
+    let log_cache: LogCache = Arc::new(Mutex::new(HashMap::new()));
+    handle_stream_with_logs(config, cache, detail_cache, &log_cache, stream)
 }
 
 fn resolve_detail_reply(

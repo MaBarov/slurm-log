@@ -161,6 +161,9 @@ impl Config {
                 "recent-cache.query.lock",
                 "archive-cache.query.lock",
                 "daemon.lock",
+                "mcp-audit.jsonl",
+                "mcp-audit.jsonl.1",
+                "mcp-audit.jsonl.lock",
             ] {
                 harden_existing(&state_directory.join(name))?;
             }

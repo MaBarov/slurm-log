@@ -61,6 +61,9 @@ fn run() -> Result<()> {
         }];
     }
     config.validate()?;
+    if args.mode == "mcp" {
+        return mcp::command(&config, args.target.as_deref());
+    }
     if args.mode == "update" {
         if args.target.is_some() {
             bail!("update takes no positional arguments");

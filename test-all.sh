@@ -40,7 +40,7 @@ run_check coverage-syntax sh -n "$project_dir/coverage.sh"
 for test_script in package_smoke offline_hostile follower_paths pane_close interactive_pane \
     details_pane details_direct focus_toast cli_surface picker_controls daemon_integration \
     workspace_controls reconcile_paths feature_coverage bank_actions bank_ui cluster_tabs \
-    degraded_clusters smart_close setup_wizard source_layout; do
+    degraded_clusters smart_close setup_wizard mcp_server source_layout; do
     run_check "$test_script-syntax" sh -n "$project_dir/tests/$test_script.sh"
 done
 run_check source_layout "$project_dir/tests/source_layout.sh"
@@ -64,4 +64,5 @@ run_check cluster_tabs "$project_dir/tests/cluster_tabs.sh"
 run_check degraded_clusters "$project_dir/tests/degraded_clusters.sh"
 run_check smart_close "$project_dir/tests/smart_close.sh"
 run_check setup_wizard "$project_dir/tests/setup_wizard.sh"
+run_check mcp_server "$project_dir/tests/mcp_server.sh"
 printf 'all slurm-log tests passed\n'

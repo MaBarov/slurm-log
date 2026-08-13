@@ -7,6 +7,8 @@ mod daemon;
 mod details;
 mod follow;
 mod lifecycle;
+mod log_service;
+mod mcp;
 mod model;
 mod setup;
 mod slurm;
@@ -164,6 +166,7 @@ USAGE
 START HERE
   slurm-log                   Browse live and recent jobs in the interactive picker
   slurm-log setup             Configure local/SSH clusters and sbatch script banks
+  slurm-log mcp               Start the client-neutral stdio MCP server
   slurm-log JOB_ID            Open one job's log in a tmux workspace
   slurm-log details JOB_ID    Show allocation, placement, and live resource usage
 
@@ -192,6 +195,12 @@ WORKSPACE & CACHE
   attach [SESSION]            Attach to a workspace
   close [SESSION]             Close a workspace
   daemon start|status|stop    Manage the per-user snapshot cache
+
+MCP
+  mcp                         Start the stdio server (`mcp serve` is an alias)
+  mcp setup                   Register detected Codex/Claude Code clients
+  mcp doctor                  Validate config, schemas, banks, and daemon access
+  mcp unregister              Remove detected client registrations
 
 INSTALLATION
   update                      Download, verify, and install the latest release

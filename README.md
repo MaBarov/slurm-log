@@ -5,7 +5,7 @@ remote jobs, presents a searchable terminal picker, and follows selected logs
 in tiled tmux panes. It supports arrays, pending jobs, archives, warning
 filtering, pane management, automatic job addition, mouse copying, lifecycle
 alerts, a live CPU/memory/GPU details dashboard, failure/resource summaries,
-and a private per-user acceleration daemon.
+an MCP server for AI clients, and a private per-user acceleration daemon.
 
 Each installation is isolated by Unix user. Configuration, job history,
 daemon sockets, and caches are never shared between users.
@@ -29,7 +29,7 @@ sh install.sh
 The script downloads only the release binary from the archive, verifies its
 published SHA-256 checksum, installs it for the current Unix user, and starts
 personal setup. It does not require Rust. To pin a release, use
-`sh install.sh --version v0.1.1`.
+`sh install.sh --version v0.2.0`.
 
 Alternatively, extract a shared release archive and run:
 
@@ -94,6 +94,66 @@ redirected, the command prints one stable plain-text snapshot.
 
 GPU allocation is always reported when present in Slurm TRES. Actual GPU
 utilization is shown only when the cluster records `gpuutil`/`gpumem` counters.
+
+## MCP server
+
+Any local MCP client that supports stdio can launch the standards-compatible
+server directly:
+
+```bash
+slurm-log mcp
+```
+
+`slurm-log mcp serve` is an explicit alias. The process writes only MCP
+JSON-RPC to stdout and exits cleanly at EOF; it never opens an HTTP port.
+Configuration is validated and snapshotted when the process starts, so reconnect
+the client after changing clusters or banks.
+
+For Codex and Claude Code, guided user-scoped setup shows the exact registration
+command before asking whether to run it, preserves existing registrations unless
+replacement is explicitly accepted, and verifies the result:
+
+```bash
+slurm-log mcp setup
+slurm-log mcp doctor
+slurm-log mcp unregister
+```
+
+Setup also prints portable JSON for Cursor, VS Code, Windsurf, Cline, and other
+stdio clients. It never edits an editor configuration or enables automatic tool
+approval. The generic shape is:
+
+```json
+{
+  "mcpServers": {
+    "slurm-log": {
+      "type": "stdio",
+      "command": "/absolute/path/slurm-log",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The server exposes owner-scoped tools for clusters, jobs, exact job inspection,
+tmux workspace context, bounded log reads/search/diagnosis, configured script
+banks, submission, and cancellation. Job inspection and logs always require an
+exact `{cluster, job_id}` pair. Submission never guesses a cluster and uses a
+five-minute, one-use preview token bound to the selected bank script, target,
+directives, working directory, job name, and SHA-256 digest. Cancellation
+revalidates the active job and expected name before affecting exactly that job
+or array task. Mutation tools carry mutation/destructive MCP annotations and
+depend on the client to request approval.
+
+Resources are available at `slurm-log://clusters`, per-cluster job lists, and
+cluster-qualified job, details, and log URIs. Concrete resources support MCP
+subscribe/unsubscribe notifications that fire only when sampled data changes;
+clients without subscriptions can use cursor-based log reads. Returned log text
+is explicitly marked as untrusted data, stripped of terminal control sequences,
+and bounded to recent Slurm `StdOut` data. No tool accepts a filesystem path,
+shell command, script body, sbatch option, SSH credential, or another user's job.
+Mutation attempts are recorded without contents or credentials in a private,
+rotating `mcp-audit.jsonl` beside the state ledger.
 
 ## Configuration
 
@@ -185,8 +245,10 @@ enumerate other users' jobs.
 The first query automatically starts a private per-user daemon. It uses a
 mode-0600 Unix socket, holds canonical hot metadata snapshots in memory, and
 stops after five idle minutes. Stale snapshots are returned immediately while
-one background refresh updates every window. It does not read log contents or
-expose a network port.
+one background refresh updates every window. MCP log requests add a bounded
+64-job/64-MiB in-memory cache; ordinary TUI use does not create a persistent
+follower. The daemon never exposes a network port, and remote MCP reads remain
+bounded one-shot commands over the existing SSH multiplexing connection.
 
 ```bash
 slurm-log daemon status
@@ -280,8 +342,9 @@ daemon lifecycle and auto-start, canonical/filter/archive caches, concurrent
 cold clients, and scheduler failures through fake local commands and private
 tmux/socket instances. It also covers arrays, warning/exception filtering,
 pending logs, cluster/accounting fallbacks, sbatch discovery/submission/cancel,
-setup, hostile inputs, atomic/private state, installation, update, uninstall,
-and package privacy.
+setup, MCP negotiation/tools/resources/subscriptions/two-phase mutations,
+forty-client daemon sharing, hostile inputs, atomic/private state, installation,
+update, uninstall, and package privacy.
 
 `tests/feature_manifest.tsv` maps each command and feature contract to its
 owning integration test. `tests/feature_coverage.sh` fails if the documented

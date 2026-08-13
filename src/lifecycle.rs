@@ -357,6 +357,9 @@ fn purge_user_data(config: &Config) -> Result<()> {
             config.state_path.with_extension("archive-cache.json"),
             state_directory.join("daemon.sock"),
             state_directory.join("daemon.lock"),
+            state_directory.join("mcp-audit.jsonl"),
+            state_directory.join("mcp-audit.jsonl.1"),
+            state_directory.join("mcp-audit.jsonl.lock"),
         ] {
             remove_application_path(&path, false)?;
         }

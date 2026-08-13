@@ -23,6 +23,7 @@ cli.command.sessions	workspace_controls.sh
 cli.command.attach	cli_surface.sh
 cli.command.close	workspace_controls.sh
 cli.command.daemon	daemon_integration.sh
+cli.command.mcp	mcp_server.sh
 cli.command.update	package_smoke.sh
 cli.command.uninstall	package_smoke.sh
 cli.direct.implicit_cluster	cli_surface.sh
@@ -125,4 +126,18 @@ security.hostile_scheduler_data	offline_hostile.sh
 security.argument_quoting	offline_hostile.sh
 security.private_files	package_smoke.sh
 security.no_external_connections	offline_hostile.sh
+mcp.lifecycle	mcp_server.sh
+mcp.stdout_purity	mcp_server.sh
+mcp.dynamic_schemas	mcp_server.sh
+mcp.structured_results	mcp_server.sh
+mcp.cluster_qualified_jobs	mcp_server.sh
+mcp.tools.read	mcp_server.sh
+mcp.tools.mutation	mcp_server.sh
+mcp.logs.cursor	mcp_server.sh
+mcp.logs.search_diagnose	mcp_server.sh
+mcp.resources	mcp_server.sh
+mcp.subscriptions	mcp_server.sh
+mcp.audit_private	mcp_server.sh
+mcp.setup_clients	mcp_server.sh
+mcp.shared_daemon_cache	mcp_server.sh
 quality.source_file_limit	source_layout.sh

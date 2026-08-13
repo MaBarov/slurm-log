@@ -181,6 +181,11 @@ pub fn configured_scripts(config: &Config) -> Result<(Vec<Script>, Vec<String>)>
     Ok((scripts, warnings))
 }
 
+pub fn configured_scripts_fresh(config: &Config) -> Result<(Vec<Script>, Vec<String>)> {
+    let (_, scripts, warnings) = scan_all_fresh(config)?;
+    Ok((scripts, warnings))
+}
+
 fn directive_job_name(directives: &[String]) -> Option<String> {
     directives.iter().find_map(|line| {
         line.strip_prefix("--job-name=")

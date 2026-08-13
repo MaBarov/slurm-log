@@ -1,0 +1,301 @@
+#!/bin/sh
+# End-to-end stdio MCP, log, mutation, subscription, setup, and sharing test.
+set -eu
+
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
+test_root=$(mktemp -d)
+case "$test_root" in /tmp/*) ;; *) exit 1 ;; esac
+fake_bin=$test_root/bin
+state_dir=$test_root/state
+mkdir -p "$fake_bin" "$state_dir" "$test_root/bank" "$test_root/work" "$test_root/clients"
+
+cleanup() {
+    SLURM_LOG_CONFIG="$test_root/config.json" "$binary" daemon stop >/dev/null 2>&1 || true
+    SLURM_LOG_CONFIG="$test_root/shared-config.json" "$binary" daemon stop >/dev/null 2>&1 || true
+    rm -rf "$test_root"
+}
+trap cleanup EXIT HUP INT TERM
+
+log_file=$test_root/job.log
+printf 'plain first line\nUserWarning: hidden warning\n' >"$log_file"
+cat >"$test_root/bank/train.sbatch" <<'EOF'
+#!/bin/sh
+#SBATCH --job-name=mcp-train
+#SBATCH --gpus=1
+printf never-executed
+EOF
+cp "$test_root/bank/train.sbatch" "$test_root/original.sbatch"
+
+cat >"$fake_bin/squeue" <<'EOF'
+#!/bin/sh
+printf 'squeue %s\n' "$*" >>"$MCP_CALLS"
+printf '123|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch\n'
+printf '124|RUNNING|pending-log|00:01|node-b|cpu|2026-08-13T10:00:00|90|pending.sbatch\n'
+printf '125|RUNNING|no-stdout|00:01|node-c|cpu|2026-08-13T10:00:00|80|quiet.sbatch\n'
+EOF
+cat >"$fake_bin/scontrol" <<'EOF'
+#!/bin/sh
+printf 'scontrol %s\n' "$*" >>"$MCP_CALLS"
+case "$*" in
+  *124*) printf 'JobId=124 JobName=pending-log JobState=RUNNING StdOut=%s/missing.log\n' "$(dirname "$MCP_LOG_FILE")" ;;
+  *125*) printf 'JobId=125 JobName=no-stdout JobState=RUNNING StdOut=/dev/null\n' ;;
+  *999*) exit 1 ;;
+  *) printf 'JobId=123 JobName=mcp-train JobState=RUNNING Reason=None Partition=gpu StdOut=%s ExitCode=0:0 Dependency=None NumNodes=1 NumCPUs=2\n' "$MCP_LOG_FILE" ;;
+esac
+EOF
+cat >"$fake_bin/sstat" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat >"$fake_bin/sbatch" <<'EOF'
+#!/bin/sh
+cat >"$MCP_SUBMITTED"
+printf '9001\n'
+EOF
+cat >"$fake_bin/scancel" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >"$MCP_CANCELLED"
+EOF
+cat >"$fake_bin/tmux" <<'EOF'
+#!/bin/sh
+printf 'slurm-logs-alpha|1|alpha|123\n'
+EOF
+cat >"$fake_bin/ssh" <<'EOF'
+#!/bin/sh
+for remote do :; done
+printf 'ssh %s\n' "$remote" >>"$MCP_CALLS"
+sh -c "$remote"
+EOF
+chmod 755 "$fake_bin/squeue" "$fake_bin/scontrol" "$fake_bin/sstat" \
+    "$fake_bin/sbatch" "$fake_bin/scancel" "$fake_bin/tmux" "$fake_bin/ssh"
+
+cat >"$test_root/config.json" <<EOF
+{
+  "clusters": [
+    {"name":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root/work","accounting":false},
+    {"name":"beta","transport":"ssh","user":"offline","sshHost":"fake-cluster","workingDirectory":"$test_root/work","accounting":false}
+  ],
+  "sbatchBanks": [{"path":"$test_root/bank","name":"Bank"}],
+  "statePath": "$state_dir/state.json"
+}
+EOF
+chmod 600 "$test_root/config.json"
+
+export PATH="$fake_bin:/usr/local/bin:/usr/bin:/bin"
+export HOME=$test_root/home
+export SLURM_LOG_CONFIG=$test_root/config.json
+export MCP_LOG_FILE=$log_file
+export MCP_CALLS=$test_root/calls
+export MCP_SUBMITTED=$test_root/submitted
+export MCP_CANCELLED=$test_root/cancelled
+: >"$MCP_CALLS"
+
+requests=$test_root/requests
+responses=$test_root/responses
+mkfifo "$requests" "$responses"
+"$binary" mcp <"$requests" >"$responses" 2>"$test_root/mcp.err" &
+server_pid=$!
+exec 3>"$requests"
+exec 4<"$responses"
+transcript=$test_root/transcript
+: >"$transcript"
+
+receive() {
+    IFS= read -r response <&4
+    printf '%s\n' "$response" >>"$transcript"
+    printf '%s\n' "$response"
+}
+request() {
+    printf '%s\n' "$1" >&3
+    receive
+}
+
+# Malformed input is ignored without contaminating stdout or killing the server.
+printf '{bad\n' >&3
+initialized=$(request '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"offline-client","version":"1"}}}')
+printf '%s\n' "$initialized" | grep -F '"protocolVersion":"2025-11-25"' >/dev/null
+printf '%s\n' "$initialized" | grep -F '"subscribe":true' >/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&3
+
+request '{"jsonrpc":"2.0","id":2,"method":"ping"}' | grep -F '"result":{}' >/dev/null
+tools=$(request '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')
+test "$(printf '%s\n' "$tools" | grep -o '"name":"slurm_' | wc -l)" -eq 11
+printf '%s\n' "$tools" | grep -F '"enum":["alpha","beta"]' >/dev/null
+printf '%s\n' "$tools" | grep -F '"destructiveHint":true' >/dev/null
+request '{"jsonrpc":"2.0","id":30,"method":"tools/list","params":{"cursor":"bad"}}' | grep -F 'invalid tool pagination cursor' >/dev/null
+request '{"jsonrpc":"2.0","id":4,"method":"unknown/method"}' | grep -F '"code":-32601' >/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":999,"reason":"offline"}}' >&3
+request '{"jsonrpc":"2.0","id":5,"method":"ping"}' | grep -F '"result":{}' >/dev/null
+
+# Dynamic schemas reject missing clusters, and exact cluster-qualified IDs stay distinct.
+request '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"slurm_inspect_job","arguments":{"job_id":"123"}}}' | grep -F 'cluster' >/dev/null
+alpha=$(request '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"slurm_list_jobs","arguments":{"cluster":"alpha"}}}')
+beta=$(request '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"slurm_list_jobs","arguments":{"cluster":"beta"}}}')
+printf '%s\n' "$alpha" | grep -F '"structuredContent":{"cluster":"alpha"' >/dev/null
+printf '%s\n' "$beta" | grep -F '"structuredContent":{"cluster":"beta"' >/dev/null
+grep -E 'squeue .* -u offline ' "$MCP_CALLS" >/dev/null
+request '{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"slurm_list_clusters","arguments":{}}}' | grep -F '"transport":"ssh"' >/dev/null
+request '{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"slurm_inspect_job","arguments":{"cluster":"alpha","job_id":"123"}}}' | grep -F '"dependencies":[]' >/dev/null
+request '{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"slurm_workspace_context","arguments":{}}}' | grep -F 'slurm-logs-alpha' >/dev/null
+request '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"slurm_list_scripts","arguments":{"cluster":"alpha","search":"train","limit":1}}}' | grep -F 'Bank/train.sbatch' >/dev/null
+request '{"jsonrpc":"2.0","id":74,"method":"tools/call","params":{"name":"slurm_list_jobs","arguments":{"cluster":"alpha","history":"all","states":["RUNNING"],"include_blocked":true,"search":"mcp","limit":1}}}' | grep -F 'mcp-train' >/dev/null
+
+# Resources/templates expose only concrete slurm-log URIs.
+request '{"jsonrpc":"2.0","id":9,"method":"resources/list","params":{}}' | grep -F 'slurm-log://jobs/alpha/123' >/dev/null
+request '{"jsonrpc":"2.0","id":10,"method":"resources/templates/list","params":{}}' | grep -F 'slurm-log://jobs/{cluster}/{job_id}/log' >/dev/null
+request '{"jsonrpc":"2.0","id":11,"method":"resources/read","params":{"uri":"file:///etc/passwd"}}' | grep -F '"code":-32602' >/dev/null
+request '{"jsonrpc":"2.0","id":90,"method":"resources/read","params":{"uri":"slurm-log://clusters"}}' | grep -F 'alpha' >/dev/null
+request '{"jsonrpc":"2.0","id":91,"method":"resources/read","params":{"uri":"slurm-log://clusters/alpha/jobs"}}' | grep -F 'mcp-train' >/dev/null
+request '{"jsonrpc":"2.0","id":92,"method":"resources/read","params":{"uri":"slurm-log://jobs/alpha/123"}}' | grep -F 'job_id' >/dev/null
+request '{"jsonrpc":"2.0","id":93,"method":"resources/read","params":{"uri":"slurm-log://jobs/alpha/123/details"}}' | grep -F 'details' >/dev/null
+request '{"jsonrpc":"2.0","id":94,"method":"resources/read","params":{"uri":"slurm-log://jobs/alpha/123/log"}}' | grep -F 'plain first line' >/dev/null
+request '{"jsonrpc":"2.0","id":110,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"123","path":"/etc/passwd"}}}' | grep -F 'unknown argument path' >/dev/null
+request '{"jsonrpc":"2.0","id":111,"method":"tools/call","params":{"name":"slurm_preview_submission","arguments":{"cluster":"alpha","script":"Bank/train.sbatch","script_body":"#!/bin/sh"}}}' | grep -F 'unknown argument script_body' >/dev/null
+
+# Tail, incremental append, truncation, rotation, sanitization, search, and diagnosis.
+tail_result=$(request '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"123","filter":"hide_warnings"}}}')
+printf '%s\n' "$tail_result" | grep -F 'plain first line' >/dev/null
+! printf '%s\n' "$tail_result" | grep -F 'hidden warning' >/dev/null
+cursor=$(printf '%s\n' "$tail_result" | sed -n 's/.*"next_cursor":"\([^"]*\)".*/\1/p')
+test -n "$cursor"
+request '{"jsonrpc":"2.0","id":120,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"beta","job_id":"123","filter":"warnings"}}}' | grep -F 'hidden warning' >/dev/null
+request '{"jsonrpc":"2.0","id":121,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"124"}}}' | grep -F '"status":"pending_log"' >/dev/null
+request '{"jsonrpc":"2.0","id":122,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"125"}}}' | grep -F '"status":"no_stdout"' >/dev/null
+request '{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"999"}}}' | grep -F '"status":"accounting_unavailable"' >/dev/null
+printf 'Traceback (most recent call last):\nValueError: appended\n' >>"$log_file"
+sleep 6
+incremental=$(request "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_read_log\",\"arguments\":{\"cluster\":\"alpha\",\"job_id\":\"123\",\"cursor\":\"$cursor\",\"filter\":\"all\"}}}")
+printf '%s\n' "$incremental" | grep -F 'ValueError: appended' >/dev/null
+next_cursor=$(printf '%s\n' "$incremental" | sed -n 's/.*"next_cursor":"\([^"]*\)".*/\1/p')
+printf 'short\n' >"$log_file"
+sleep 6
+reset=$(request "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_read_log\",\"arguments\":{\"cluster\":\"alpha\",\"job_id\":\"123\",\"cursor\":\"$next_cursor\",\"filter\":\"all\"}}}")
+printf '%s\n' "$reset" | grep -F '"cursor_reset":true' >/dev/null
+reset_cursor=$(printf '%s\n' "$reset" | sed -n 's/.*"next_cursor":"\([^"]*\)".*/\1/p')
+mv "$log_file" "$test_root/job.log.1"
+printf 'rotated generation\n' >"$log_file"
+sleep 6
+rotated=$(request "{\"jsonrpc\":\"2.0\",\"id\":140,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_read_log\",\"arguments\":{\"cluster\":\"alpha\",\"job_id\":\"123\",\"cursor\":\"$reset_cursor\",\"filter\":\"all\"}}}")
+printf '%s\n' "$rotated" | grep -F '"cursor_reset":true' >/dev/null
+printf '%s\n' "$rotated" | grep -F 'rotated generation' >/dev/null
+printf 'CUDA out of memory on rank 0\nNCCL error\n' >>"$log_file"
+sleep 6
+request '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"slurm_search_log","arguments":{"cluster":"alpha","job_id":"123","pattern":"(a+)+$","regex":true,"max_matches":5}}}' | grep -F '"scan_limit_bytes":4194304' >/dev/null
+request '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"slurm_diagnose_job","arguments":{"cluster":"alpha","job_id":"123"}}}' | grep -F 'cuda_out_of_memory' >/dev/null
+
+# Submission is digest-bound, one-use, exact-stdin only; cancellation revalidates name.
+stale_preview=$(request '{"jsonrpc":"2.0","id":160,"method":"tools/call","params":{"name":"slurm_preview_submission","arguments":{"cluster":"alpha","script":"Bank/train.sbatch"}}}')
+stale_token=$(printf '%s\n' "$stale_preview" | sed -n 's/.*"preview_token":"\([^"]*\)".*/\1/p')
+printf '# changed after preview\n' >>"$test_root/bank/train.sbatch"
+request "{\"jsonrpc\":\"2.0\",\"id\":161,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_submit_job\",\"arguments\":{\"preview_token\":\"$stale_token\"}}}" | grep -F 'preview is stale' >/dev/null
+cp "$test_root/original.sbatch" "$test_root/bank/train.sbatch"
+preview=$(request '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"slurm_preview_submission","arguments":{"cluster":"alpha","script":"Bank/train.sbatch"}}}')
+token=$(printf '%s\n' "$preview" | sed -n 's/.*"preview_token":"\([^"]*\)".*/\1/p')
+test -n "$token"
+request "{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_submit_job\",\"arguments\":{\"preview_token\":\"$token\"}}}" | grep -F '"job_id":"9001"' >/dev/null
+cmp "$test_root/bank/train.sbatch" "$MCP_SUBMITTED"
+request "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_submit_job\",\"arguments\":{\"preview_token\":\"$token\"}}}" | grep -F 'already consumed' >/dev/null
+request '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"slurm_cancel_job","arguments":{"cluster":"alpha","job_id":"123","expected_job_name":"wrong"}}}' | grep -F 'job name changed' >/dev/null
+request '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"slurm_cancel_job","arguments":{"cluster":"alpha","job_id":"123","expected_job_name":"mcp-train"}}}' | grep -F '"cancelled":true' >/dev/null
+test "$(cat "$MCP_CANCELLED")" = 123
+audit=$state_dir/mcp-audit.jsonl
+test "$(stat -c %a "$audit")" = 600
+grep -F '"digest":"' "$audit" >/dev/null
+! grep -F 'never-executed' "$audit" >/dev/null
+
+# A concrete log subscription emits only after change, then can be removed.
+request '{"jsonrpc":"2.0","id":210,"method":"resources/subscribe","params":{"uri":"slurm-log://clusters"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":211,"method":"resources/subscribe","params":{"uri":"slurm-log://clusters/alpha/jobs"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":212,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/123"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":213,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/123/details"}}' | grep -F '"result":{}' >/dev/null
+sleep 1
+request '{"jsonrpc":"2.0","id":214,"method":"resources/unsubscribe","params":{"uri":"slurm-log://clusters"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":215,"method":"resources/unsubscribe","params":{"uri":"slurm-log://clusters/alpha/jobs"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":216,"method":"resources/unsubscribe","params":{"uri":"slurm-log://jobs/alpha/123"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":217,"method":"resources/unsubscribe","params":{"uri":"slurm-log://jobs/alpha/123/details"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":218,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/999"}}' | grep -F '"result":{}' >/dev/null
+receive | grep -F '"method":"notifications/resources/updated"' >/dev/null
+request '{"jsonrpc":"2.0","id":22,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/123/log"}}' | grep -F '"result":{}' >/dev/null
+sleep 1
+printf 'subscription append\n' >>"$log_file"
+(receive >"$test_root/notification") & notification_reader=$!
+attempt=0
+while kill -0 "$notification_reader" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if test "$attempt" -ge 120; then kill "$notification_reader"; exit 1; fi
+    sleep 0.1
+done
+wait "$notification_reader"
+grep -F '"method":"notifications/resources/updated"' "$test_root/notification" >/dev/null
+request '{"jsonrpc":"2.0","id":23,"method":"resources/unsubscribe","params":{"uri":"slurm-log://jobs/alpha/123/log"}}' | grep -F '"result":{}' >/dev/null
+
+exec 3>&-
+wait "$server_pid"
+test ! -s "$test_root/mcp.err"
+awk 'substr($0,1,1) != "{" { exit 1 }' "$transcript"
+
+# Setup is non-destructive when non-interactive and unregister is verified.
+cat >"$fake_bin/codex" <<'EOF'
+#!/bin/sh
+printf 'codex %s\n' "$*" >>"$MCP_CLIENT_CALLS"
+case "$*" in
+  'mcp get slurm-log --json') test -f "$MCP_CLIENT_STATE/codex" ;;
+  'mcp add slurm-log -- '*) touch "$MCP_CLIENT_STATE/codex" ;;
+  'mcp remove slurm-log') rm -f "$MCP_CLIENT_STATE/codex" ;;
+  *) exit 2 ;;
+esac
+EOF
+cat >"$fake_bin/claude" <<'EOF'
+#!/bin/sh
+printf 'claude %s\n' "$*" >>"$MCP_CLIENT_CALLS"
+case "$*" in
+  'mcp get slurm-log') test -f "$MCP_CLIENT_STATE/claude" ;;
+  'mcp add --scope user slurm-log -- '*) touch "$MCP_CLIENT_STATE/claude" ;;
+  'mcp remove --scope user slurm-log') rm -f "$MCP_CLIENT_STATE/claude" ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod 755 "$fake_bin/codex" "$fake_bin/claude"
+export MCP_CLIENT_CALLS=$test_root/client-calls
+export MCP_CLIENT_STATE=$test_root/clients
+: >"$MCP_CLIENT_CALLS"
+"$binary" mcp setup </dev/null >"$test_root/setup.out"
+grep -F 'codex mcp add slurm-log -- ' "$test_root/setup.out" >/dev/null
+grep -F 'claude mcp add --scope user slurm-log -- ' "$test_root/setup.out" >/dev/null
+grep -F '"mcpServers"' "$test_root/setup.out" >/dev/null
+! grep -F ' mcp add ' "$MCP_CLIENT_CALLS" >/dev/null
+touch "$MCP_CLIENT_STATE/codex" "$MCP_CLIENT_STATE/claude"
+"$binary" mcp setup </dev/null | grep -F 'left unchanged' >/dev/null
+"$binary" mcp unregister >/dev/null
+test ! -e "$MCP_CLIENT_STATE/codex" && test ! -e "$MCP_CLIENT_STATE/claude"
+mkdir -p "$test_root/doctor-state"
+sed "s|$state_dir/state.json|$test_root/doctor-state/state.json|" \
+    "$test_root/config.json" >"$test_root/doctor-config.json"
+SLURM_LOG_CONFIG="$test_root/doctor-config.json" "$binary" mcp doctor |
+    grep -F 'private daemon: ok' >/dev/null
+
+# Forty stdio clients share the private daemon scheduler snapshot.
+shared_state=$test_root/shared-state
+mkdir -p "$shared_state"
+sed "s|$state_dir/state.json|$shared_state/state.json|" "$test_root/config.json" >"$test_root/shared-config.json"
+: >"$MCP_CALLS"
+cat >"$test_root/one-client.in" <<'EOF'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"shared","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"slurm_list_jobs","arguments":{"cluster":"alpha"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"123","filter":"all"}}}
+EOF
+pids=
+index=1
+while test "$index" -le 40; do
+    SLURM_LOG_CONFIG="$test_root/shared-config.json" "$binary" mcp \
+        <"$test_root/one-client.in" >"$test_root/client-$index.out" &
+    pids="$pids $!"
+    index=$((index + 1))
+done
+for pid in $pids; do wait "$pid"; done
+test "$(grep -c '^squeue .* -u offline ' "$MCP_CALLS")" -eq 1
+test "$(grep -c '^scontrol show job 123' "$MCP_CALLS")" -eq 1
+
+printf 'mcp_server: ok (stdio, tools, resources, logs, mutations, subscriptions, setup, sharing; fully offline)\n'

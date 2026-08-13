@@ -30,7 +30,7 @@ fi
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 mkdir -p "$tmp_dir/slurm-log/bin"
-for item in Cargo.toml Cargo.lock deny.toml README.md LICENSE install.sh update.sh uninstall.sh package.sh test-all.sh security-audit.sh config.example.json src tests; do
+for item in Cargo.toml Cargo.lock deny.toml README.md CHANGELOG.md LICENSE install.sh update.sh uninstall.sh package.sh test-all.sh security-audit.sh config.example.json src tests; do
     cp -R "$script_dir/$item" "$tmp_dir/slurm-log/"
 done
 install -m 755 "$release_binary" "$tmp_dir/slurm-log/bin/slurm-log"

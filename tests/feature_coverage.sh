@@ -28,7 +28,7 @@ done
 
 help=$($binary --help)
 views='all running failed blocked archive last watch fzf'
-commands='setup details bank submit cancel read unread json sessions attach close daemon update uninstall'
+commands='setup details bank submit cancel read unread json sessions attach close daemon mcp update uninstall'
 for view in $views; do
     require_feature "cli.view.$view"
     printf '%s\n' "$help" | grep -E "^  $view([[:space:]]|$)" >/dev/null || fail "view absent from help: $view"
