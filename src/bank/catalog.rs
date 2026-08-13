@@ -199,8 +199,13 @@ fn directive_job_name(directives: &[String]) -> Option<String> {
 /// Reject an sbatch directive that would send a previewed script to a
 /// controller other than the selected target.  Both long and short Slurm
 /// spellings are accepted only when their sole value equals the configured
-/// controller identity.
+/// controller identity.  Targets without an explicitly configured controller
+/// do not bind scheduler commands, so a routing directive cannot contradict a
+/// declared identity and is left to the scheduler to honour or reject.
 pub fn validate_script_controller(script: &Script, target: &ClusterConfig) -> Result<()> {
+    if !target.binds_controller() {
+        return Ok(());
+    }
     for directive in &script.directives {
         let Some(value) = routing_directive_value(directive)? else {
             continue;
@@ -278,13 +283,14 @@ pub fn submit(config: &Config, script: &Script, cluster: &str) -> Result<Job> {
         bail!("sbatch returned an invalid job ID: {:?}", output.trim());
     }
     let actual_controller = parts.next();
-    if target.remote() && actual_controller.is_none() {
+    if target.remote() && target.binds_controller() && actual_controller.is_none() {
         bail!(
             "remote sbatch did not return a controller identity for configured controller {:?}",
             target.controller()
         );
     }
-    if let Some(actual_controller) = actual_controller
+    if target.binds_controller()
+        && let Some(actual_controller) = actual_controller
         && actual_controller != target.controller()
     {
         bail!(

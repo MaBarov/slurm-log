@@ -104,7 +104,7 @@ fn fresh_configuration_has_one_neutral_local_cluster() {
 }
 
 #[test]
-fn only_explicit_local_controllers_are_bound_to_scheduler_commands() {
+fn only_explicit_controllers_are_bound_to_scheduler_commands() {
     let local = config();
     assert_eq!(local.clusters[0].name, "sprint");
     assert!(!local.clusters[0].binds_controller());
@@ -122,8 +122,13 @@ fn only_explicit_local_controllers_are_bound_to_scheduler_commands() {
         working_directory: PathBuf::from("/tmp"),
         accounting: true,
     };
-    assert!(remote.binds_controller());
+    assert!(!remote.binds_controller());
     assert_eq!(remote.controller(), "cispa");
+
+    let mut bound_remote = remote.clone();
+    bound_remote.controller = Some("real-cispa".into());
+    assert!(bound_remote.binds_controller());
+    assert_eq!(bound_remote.controller(), "real-cispa");
 }
 
 #[test]

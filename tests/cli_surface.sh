@@ -86,7 +86,7 @@ case "$*" in
     *'squeue -h'*)
         printf '201|RUNNING|beta-run|00:02|beta-node|gpu|2026-08-12T10:00:00|2000|remote.sbatch|offline-beta\n'
         ;;
-    *'sacct '*' -X -S'*)
+    *'sacct '*'-X -S'*)
         printf '401|COMPLETED|beta-complete|00:05|%s|0:0|3G|cpu=4,gres/gpu=1|gpu|offline-beta|beta\n' "$CLI_NOW"
         ;;
     *) exit 23 ;;

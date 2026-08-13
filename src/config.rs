@@ -52,12 +52,14 @@ impl ClusterConfig {
 
     /// Whether this target can be passed explicitly to Slurm commands.
     ///
-    /// `name` is a display label, so a local target needs an explicit
-    /// controller before it can be passed to Slurm. Remote targets still bind
-    /// explicitly: when their controller is absent, the legacy name fallback
-    /// remains their controller identity.
+    /// `name` is a local display label, so no `--clusters` argument is
+    /// constructed unless a controller is explicitly configured. This applies
+    /// to remote targets too: a remote host may be single-cluster or name its
+    /// scheduler differently from the display label, and fabricating a
+    /// `--clusters <name>` argument for it produces a fatal scheduler error.
+    /// The SSH host still binds the remote target exactly.
     pub fn binds_controller(&self) -> bool {
-        self.remote() || self.controller.is_some()
+        self.controller.is_some()
     }
 }
 
