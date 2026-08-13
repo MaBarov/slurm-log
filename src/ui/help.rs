@@ -147,10 +147,15 @@ fn draw_popup(
         if height > 0 {
             frame[height as usize - 1] = popup_styled(
                 fit_popup_line(
-                    &format!(
-                        "{}{}",
-                        footer_text(rows.len(), selected.len(), query, &warning, notice),
-                        blocked_summary(blocked_count, blocked)
+                    &footer_line(
+                        width,
+                        rows.len(),
+                        selected.len(),
+                        query,
+                        &warning,
+                        notice,
+                        blocked_count,
+                        blocked,
                     ),
                     width,
                 ),

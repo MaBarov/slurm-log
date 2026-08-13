@@ -29,7 +29,7 @@ sh install.sh
 The script downloads only the release binary from the archive, verifies its
 published SHA-256 checksum, installs it for the current Unix user, and starts
 personal setup. It does not require Rust. To pin a release, use
-`sh install.sh --version v0.2.1`.
+`sh install.sh --version v0.2.2`.
 
 Alternatively, extract a shared release archive and run:
 

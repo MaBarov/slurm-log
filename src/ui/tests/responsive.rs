@@ -183,3 +183,34 @@ fn grouped_rows_and_cells_never_exceed_the_terminal() {
     assert!(rendered.ends_with('…'));
     assert_eq!(UnicodeWidthStr::width(fit_cell("界", 4).as_str()), 4);
 }
+
+#[test]
+fn verbose_footer_stays_on_one_row_and_prioritizes_blocked_status() {
+    let warning = " | sprint: completed jobs unavailable because sacct/accounting is disabled; \
+                   only active squeue jobs can be listed";
+    let line = footer_line(120, 120, 0, "", warning, "", 18, false);
+
+    assert!(line.starts_with("120 rows, 0 selected | blocked: 18 (b to show)"));
+    assert!(line.contains("sprint: completed jobs unavailable"));
+    assert!(line.ends_with('…'));
+    assert!(!line.contains(['\r', '\n']));
+    assert_eq!(UnicodeWidthStr::width(line.as_str()), 119);
+}
+
+#[test]
+fn footer_reserves_the_terminal_final_column_for_wrap_safety() {
+    for width in [44, 80, 120] {
+        let line = footer_line(
+            width,
+            100_000,
+            42,
+            "界".repeat(100).as_str(),
+            " | a very long warning",
+            "a very long notice",
+            9_999,
+            true,
+        );
+        assert!(UnicodeWidthStr::width(line.as_str()) < width as usize);
+        assert!(!line.contains(['\r', '\n']));
+    }
+}

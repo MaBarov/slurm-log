@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Keep verbose picker warnings on one terminal row so they cannot auto-wrap
+  the footer and scroll the header off-screen.
+- Preserve the actionable blocked-job status ahead of truncated warning text.
+
 ## 0.2.1
 
 - Keep completed jobs dismissed on the first attempt by reloading the current

@@ -116,15 +116,17 @@ fn draw(
     execute!(
         out,
         cursor::MoveTo(0, height.saturating_sub(1)),
-        Print(footer_text(
+        SetForegroundColor(Color::DarkGrey),
+        Print(footer_line(
+            width,
             rows.len(),
             selected.len(),
             query,
             &warning,
             notice,
+            blocked_count,
+            blocked,
         )),
-        SetForegroundColor(Color::DarkGrey),
-        Print(blocked_summary(blocked_count, blocked)),
         ResetColor,
         terminal::Clear(ClearType::UntilNewLine)
     )?;
@@ -176,6 +178,26 @@ fn footer_text(rows: usize, selected: usize, query: &str, warning: &str, notice:
             format!(" | {notice}")
         }
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn footer_line(
+    width: u16,
+    rows: usize,
+    selected: usize,
+    query: &str,
+    warning: &str,
+    notice: &str,
+    blocked_count: usize,
+    blocked: bool,
+) -> String {
+    // Keep the actionable blocked count ahead of verbose scheduler warnings.
+    // Most importantly, never write into the terminal's final column: doing so
+    // can auto-wrap the last row and scroll the picker header off-screen.
+    let mut line = footer_text(rows, selected, query, "", notice);
+    line.push_str(&blocked_summary(blocked_count, blocked));
+    line.push_str(warning);
+    truncate_display(&line, width.saturating_sub(1) as usize)
 }
 
 #[cfg(test)]
