@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5
+
+- Treat local cluster names as display labels unless an explicit controller is
+  configured, preventing invalid `--clusters` arguments for local schedulers.
+- Flatten multi-line scheduler failures and terminal control bytes before
+  rendering picker footer warnings, preserving the one-row UI invariant.
+
 ## 0.2.4
 
 - Bind remote scheduler operations and mutation results to the configured

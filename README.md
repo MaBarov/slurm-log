@@ -32,7 +32,7 @@ detached manifest signature before downloading the archive, then checks the
 signed size and digest before extraction or starting the candidate binary. Do
 not obtain the PEM from the same release URL, archive, or mutable mirror being
 verified. The script does not require Rust. To pin a release, use
-`sh install.sh --version v0.2.4 --release-public-key /secure/path/key.pem`.
+`sh install.sh --version v0.2.5 --release-public-key /secure/path/key.pem`.
 
 Alternatively, extract a shared release archive and run:
 
