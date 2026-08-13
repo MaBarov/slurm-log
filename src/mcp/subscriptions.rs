@@ -10,7 +10,7 @@ use anyhow::Result;
 use rmcp::{
     ErrorData as McpError,
     model::ResourceUpdatedNotificationParam,
-    service::{Peer, RoleServer},
+    service::{Peer, RequestContext, RoleServer},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -30,10 +30,31 @@ impl McpServer {
         &self,
         uri: String,
         peer: Peer<RoleServer>,
+        context: &RequestContext<RoleServer>,
     ) -> Result<(), McpError> {
         let route = ResourceRoute::parse(&uri, &self.config)
             .map_err(|error| McpError::invalid_params(format!("{error:#}"), None))?;
         let log = route.is_log();
+        // Reject excess subscriptions before doing an expensive scheduler RPC.
+        {
+            let entries = self
+                .subscriptions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if !entries.contains_key(&uri) {
+                check_capacity(&entries, log)?;
+            }
+        }
+        if let Some((cluster, id)) = route.exact_job() {
+            let config = Arc::clone(&self.config);
+            let cluster = cluster.to_string();
+            let id = id.to_string();
+            self.run_blocking(context, move || {
+                crate::slurm::authorize_exact_job(&config, &cluster, &id)
+            })
+            .await?
+            .map_err(|error| McpError::invalid_params(format!("{error:#}"), None))?;
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut entries = self
@@ -107,6 +128,7 @@ impl McpServer {
                 Ok((hash(&value)?, terminal))
             }
             ResourceRoute::Details(cluster, id) => {
+                crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
                 let details = crate::daemon::job_details(&self.config, cluster, id, false)?;
                 let terminal = details.terminal;
                 let mut value = serde_json::to_value(details)?;
@@ -117,6 +139,7 @@ impl McpServer {
                 Ok((hash(&value)?, terminal))
             }
             ResourceRoute::Log(cluster, id) => {
+                crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
                 let log = crate::daemon::log_metadata(&self.config, cluster, id)?;
                 let value = json!({
                     "status":log.status,"generation":log.generation,"size":log.size,
@@ -135,7 +158,7 @@ async fn monitor(
     cancel: Arc<AtomicBool>,
     peer: Peer<RoleServer>,
 ) {
-    let mut previous = fingerprint(&server, &uri).await;
+    let mut previous = fingerprint(&server, &uri, Arc::clone(&cancel)).await;
     if previous.as_ref().is_some_and(|value| value.1) {
         let _ = peer
             .notify_resource_updated(ResourceUpdatedNotificationParam::new(uri.clone()))
@@ -150,7 +173,7 @@ async fn monitor(
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let current = fingerprint(&server, &uri).await;
+        let current = fingerprint(&server, &uri, Arc::clone(&cancel)).await;
         if current.is_none() {
             quiet_seconds = quiet_seconds.saturating_add(interval);
             continue;
@@ -220,12 +243,17 @@ fn remove_subscription(server: &McpServer, uri: &str, cancel: &Arc<AtomicBool>) 
     }
 }
 
-async fn fingerprint(server: &McpServer, uri: &str) -> Option<(String, bool)> {
+async fn fingerprint(
+    server: &McpServer,
+    uri: &str,
+    cancel: Arc<AtomicBool>,
+) -> Option<(String, bool)> {
     let server = server.clone();
     let uri = uri.to_string();
-    tokio::task::spawn_blocking(move || server.subscription_fingerprint(&uri))
+    let worker = server.clone();
+    server
+        .run_subscription_blocking(cancel, move || worker.subscription_fingerprint(&uri))
         .await
-        .ok()
         .and_then(Result::ok)
 }
 
@@ -240,6 +268,38 @@ fn hash(value: &impl serde::Serialize) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        config::{ClusterConfig, Config},
+        mcp::schema,
+    };
+    use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+
+    fn server() -> McpServer {
+        let config = Config {
+            local_user: "offline".into(),
+            remote_user: "offline".into(),
+            ssh_host: String::new(),
+            state_path: PathBuf::from("/tmp/slurm-log-subscription-test-state.json"),
+            executable: PathBuf::from("/bin/false"),
+            sbatch_banks: Vec::new(),
+            clusters: vec![ClusterConfig {
+                name: "alpha".into(),
+                controller: None,
+                transport: "local".into(),
+                user: "offline".into(),
+                ssh_host: String::new(),
+                working_directory: PathBuf::from("/tmp"),
+                accounting: false,
+            }],
+        };
+        McpServer {
+            tools: Arc::new(schema::tools(&config)),
+            config: Arc::new(config),
+            previews: Arc::new(Mutex::new(HashMap::new())),
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
+            work: Arc::new(tokio::sync::Semaphore::new(4)),
+        }
+    }
 
     #[test]
     fn fingerprints_are_deterministic_and_sensitive() {
@@ -273,5 +333,44 @@ mod tests {
             .collect();
         assert!(check_capacity(&entries, true).is_err());
         assert!(check_capacity(&entries, false).is_ok());
+
+        let full = (0..MAX_SUBSCRIPTIONS)
+            .map(|index| {
+                (
+                    index.to_string(),
+                    Subscription {
+                        cancel: Arc::new(AtomicBool::new(false)),
+                        log: false,
+                    },
+                )
+            })
+            .collect();
+        assert!(check_capacity(&full, false).is_err());
+    }
+
+    #[test]
+    fn cluster_fingerprint_and_unsubscribe_are_scoped_to_the_exact_entry() {
+        let server = server();
+        let (fingerprint, terminal) = server
+            .subscription_fingerprint("slurm-log://clusters")
+            .unwrap();
+        assert_eq!(fingerprint.len(), 64);
+        assert!(!terminal);
+
+        let first = Arc::new(AtomicBool::new(false));
+        server.subscriptions.lock().unwrap().insert(
+            "slurm-log://clusters".into(),
+            Subscription {
+                cancel: Arc::clone(&first),
+                log: false,
+            },
+        );
+        let unrelated = Arc::new(AtomicBool::new(false));
+        remove_subscription(&server, "slurm-log://clusters", &unrelated);
+        assert_eq!(server.subscriptions.lock().unwrap().len(), 1);
+
+        server.unsubscribe_resource("slurm-log://clusters").unwrap();
+        assert!(first.load(Ordering::Acquire));
+        assert!(server.unsubscribe_resource("slurm-log://clusters").is_err());
     }
 }

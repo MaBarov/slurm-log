@@ -20,14 +20,27 @@ trap cleanup EXIT HUP INT TERM
 
 cat >"$test_root/bin/squeue" <<'EOF'
 #!/bin/sh
+case "$*" in
+    *'%i|%u|%T'*)
+        id=
+        previous=
+        for argument do
+            if test "$previous" = -j; then id=$argument; break; fi
+            previous=$argument
+        done
+        printf '%s|offline|RUNNING|job-%s|00:01|node|cpu|now|%s|sbatch\n' "$id" "$id" "$id"
+        exit 0
+        ;;
+esac
 for id in 101 102 103; do
-    printf '%s|RUNNING|job-%s|00:01|node|cpu|now|%s|sbatch\n' "$id" "$id" "$id"
+    printf '%s|RUNNING|job-%s|00:01|node|cpu|now|%s|sbatch|offline\n' "$id" "$id" "$id"
 done
 EOF
 cat >"$test_root/bin/scontrol" <<EOF
 #!/bin/sh
-id=\${3:-101}
-printf 'JobId=%s JobName=job-%s JobState=RUNNING StdOut=$test_root/job.log\n' "\$id" "\$id"
+id=
+for argument do id=\$argument; done
+printf 'JobId=%s UserId=offline(1000) JobName=job-%s JobState=RUNNING StdOut=$test_root/job.log\n' "\$id" "\$id"
 EOF
 chmod 755 "$test_root/bin/squeue" "$test_root/bin/scontrol"
 printf 'offline reconcile log\n' >"$test_root/job.log"

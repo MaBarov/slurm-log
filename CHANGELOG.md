@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4
+
+- Bind remote scheduler operations and mutation results to the configured
+  controller, and reject array-wide cancellation through bare master IDs.
+- Enforce fresh owner/controller authorization and descriptor-confined log
+  and bank access across MCP, daemon, details, and subscription paths.
+- Bound MCP frames, concurrent blocking work, command lifetimes, release
+  downloads, and archive extraction.
+- Authenticate releases with a signed canonical manifest and an immutable
+  Ed25519 public key before downloading, extracting, or executing artifacts.
+- Split verification, signing, and publishing into separately privileged
+  GitHub jobs with protected environment secrets and pinned tooling.
+
 ## 0.2.3
 
 - Make long-lived MCP connections discover newly configured sbatch banks and

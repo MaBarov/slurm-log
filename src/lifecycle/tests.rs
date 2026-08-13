@@ -1,19 +1,7 @@
 use super::*;
 
 #[test]
-fn release_roots_and_checksums_are_strict() {
-    assert!(validate_release_root("https://example.invalid/releases").is_ok());
-    assert!(validate_release_root("file:///tmp/releases").is_ok());
-    assert!(validate_release_root("http://example.invalid").is_err());
-    assert!(validate_release_root("https://example.invalid\nforged").is_err());
-
-    let digest = "0123456789abcdef".repeat(4);
-    assert_eq!(
-        parse_checksum(&format!("{digest}  release.tar.gz\n")).unwrap(),
-        digest
-    );
-    assert!(parse_checksum("abcd").is_err());
-    assert!(parse_checksum(&"g".repeat(64)).is_err());
+fn versions_are_strict() {
     assert_eq!(parse_version("1.24.3").unwrap(), (1, 24, 3));
     assert!(parse_version("1.2").is_err());
     assert!(parse_version("1.2.3.4").is_err());
@@ -48,43 +36,14 @@ fn atomic_replacement_rejects_directories_and_preserves_mode() {
         0o755
     );
     assert!(canonical_regular_file(directory.path(), "fixture").is_err());
-}
-
-#[test]
-fn private_temp_allocation_handles_collisions_and_invalid_roots() {
-    let directory = tempfile::tempdir().unwrap();
-    for attempt in 0..8 {
-        fs::create_dir(
-            directory
-                .path()
-                .join(format!("slurm-log-update-7-9-{attempt}")),
-        )
-        .unwrap();
-    }
-    assert!(private_temp_dir_in(directory.path(), 9, 7).is_err());
-    assert!(private_temp_dir_in(&directory.path().join("missing/root"), 10, 8).is_err());
-
-    let allocated = private_temp_dir_in(directory.path(), 11, 9).unwrap();
-    assert_eq!(
-        fs::metadata(&allocated.0).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
-    let allocated_path = allocated.0.clone();
-    drop(allocated);
-    assert!(!allocated_path.exists());
+    let linked = directory.path().join("linked");
+    std::os::unix::fs::symlink(&target, &linked).unwrap();
+    assert!(canonical_regular_file(&linked, "fixture").is_err());
 }
 
 #[test]
 fn checksum_candidate_and_atomic_failure_paths_fail_closed() {
     let directory = tempfile::tempdir().unwrap();
-    let archive = directory.path().join("archive");
-    let checksum = directory.path().join("archive.sha256");
-    fs::write(&archive, b"payload").unwrap();
-    fs::write(&checksum, "0".repeat(64)).unwrap();
-    assert!(verify_checksum(&archive, &checksum).is_err());
-    fs::write(&checksum, "0".repeat(4097)).unwrap();
-    assert!(verify_checksum(&archive, &checksum).is_err());
-
     let empty = directory.path().join("empty");
     fs::write(&empty, b"").unwrap();
     fs::set_permissions(&empty, fs::Permissions::from_mode(0o755)).unwrap();

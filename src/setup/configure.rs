@@ -69,6 +69,21 @@ fn configure_clusters(current: &Config) -> Result<Vec<ClusterConfig>> {
         };
         let old_name = old.filter(|_| !host_changed).map(|item| item.name.as_str());
         let name = prompt("  Short name", old_name.unwrap_or(&automatic_name))?;
+        let controller = if transport == "ssh" {
+            let detected_controller = probe
+                .as_ref()
+                .and_then(|probe| probe.cluster.as_deref())
+                .map(|value| safe_cluster_name(value, &name));
+            let default = old
+                .filter(|_| !host_changed)
+                .and_then(|item| item.controller.as_deref())
+                .or(detected_controller.as_deref())
+                .unwrap_or(&name);
+            Some(prompt("  Scheduler controller identity", default)?)
+        } else {
+            old.filter(|_| !host_changed)
+                .and_then(|item| item.controller.clone())
+        };
         let detected_user = probe.as_ref().and_then(|probe| probe.user.as_deref());
         let user = prompt(
             "  SLURM user",
@@ -92,6 +107,7 @@ fn configure_clusters(current: &Config) -> Result<Vec<ClusterConfig>> {
         let accounting = prompt_yes_no("  Is sacct accounting available", accounting_default)?;
         clusters.push(ClusterConfig {
             name,
+            controller,
             transport,
             user,
             ssh_host,

@@ -42,7 +42,7 @@ if ! (
     # A physical Enter key sends carriage return in raw terminal mode.
     printf 'j\r'
     sleep 0.2
-    printf '\n\n\n\nno\nno\n\n'
+    printf '\n\n\n\n\nno\nno\n\n'
 ) | env \
         HOME="$home_dir" USER=local-user \
         SLURM_LOG_CONFIG="$config" SETUP_SSH_CALLS="$calls" \
@@ -53,6 +53,7 @@ if ! (
 fi
 
 grep -q '"name": "gpu-cluster"' "$config"
+grep -q '"controller": "gpu-cluster"' "$config"
 grep -q '"transport": "ssh"' "$config"
 grep -q '"user": "remote-user"' "$config"
 grep -q '"sshHost": "beta"' "$config"
@@ -70,25 +71,28 @@ local_config=$test_root/local-config.json
 mkdir -p "$local_home" "$repository/.git" "$repository/jobs"
 printf '#!/bin/sh\n#SBATCH --job-name=offline\n' >"$repository/jobs/train.sbatch"
 local_transcript=$test_root/local-transcript
-if ! (
-    # One local cluster and all default cluster fields.
-    printf '\n\n\n\n\n\n'
-    # Discover only the controlled workspace and accept its repository.
-    printf 'yes\n%s\n\n' "$scan_root"
-    # Add one manual bank with the raw-mode browser. The first root is the
-    # current repository; j selects the next root (our temporary HOME).
-    printf 'yes\nyes\n'
-    sleep 0.2
-    printf 'j\r'
-    sleep 0.1
-    printf '\r'
-    sleep 0.2
-    printf 'Manual Home\nno\n\n'
-) | env \
-        HOME="$local_home" USER=local-user \
-        SLURM_LOG_CONFIG="$local_config" \
-        PATH="/usr/local/bin:/usr/bin:/bin" \
-        timeout 15 script -qefc "$binary setup" /dev/null >"$local_transcript"; then
+if ! env HOME="$local_home" USER=local-user \
+    SLURM_LOG_CONFIG="$local_config" \
+    PATH="/usr/local/bin:/usr/bin:/bin" \
+    python3 "$project_dir/tests/pty_sequence.py" "$local_transcript" \
+    'Number of SLURM clusters' '\r' \
+    'Connection (local/ssh)' '\r' \
+    'Short name' '\r' \
+    'SLURM user' '\r' \
+    'Default job working directory' '\r' \
+    'Is sacct accounting available' '\r' \
+    'Discover repositories containing .sbatch files' 'yes\r' \
+    'Workspace roots (space-separated' "$scan_root\r" \
+    'Banks to use (all, none' '\r' \
+    'Add a bank directory manually' 'yes\r' \
+    'Use folder browser' 'yes\r' \
+    'Choose an sbatch bank directory' 'j' \
+    'Choose an sbatch bank directory' '\r' \
+    'Choose an sbatch bank directory' '\r' \
+    'Name (blank = Git repository or directory name)' 'Manual Home\r' \
+    'Add a bank directory manually' 'no\r' \
+    'State file' '\r' \
+    -- "$binary" setup; then
     sed -n '1,220p' "$local_transcript" >&2
     exit 1
 fi

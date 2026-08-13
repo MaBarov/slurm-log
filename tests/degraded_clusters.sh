@@ -26,13 +26,13 @@ trap cleanup EXIT HUP INT TERM
 
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
-printf '777|RUNNING|alpha-job|00:01|alpha-node|cpu|2026-08-12T10:00:00|1000|train.sbatch\n'
+printf '777|RUNNING|alpha-job|00:01|alpha-node|cpu|2026-08-12T10:00:00|1000|train.sbatch|offline\n'
 EOF
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 case "${OFFLINE_CLUSTER_MODE:-normal}:$*" in
     normal:*'squeue -h'*)
-        printf '777|RUNNING|beta-job|00:02|beta-node|gpu|2026-08-12T10:00:00|2000|remote.sbatch\n'
+        printf '777|RUNNING|beta-job|00:02|beta-node|gpu|2026-08-12T10:00:00|2000|remote.sbatch|offline\n'
         ;;
     normal:*'sacct -X -S'*) : ;;
     degraded:*)

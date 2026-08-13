@@ -139,6 +139,27 @@ pub fn valid_job_id(id: &str) -> bool {
     digits(first) && parts.next().is_none_or(digits) && parts.next().is_none()
 }
 
+/// Make scheduler and bank metadata safe to print in a terminal. Logs have a
+/// richer MCP-specific sanitizer; UI metadata must never carry raw escape,
+/// carriage-return, clipboard, or other control sequences into a terminal.
+pub fn terminal_text(value: &str) -> String {
+    let mut safe = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\x1b' => safe.push_str("\\x1b"),
+            '\n' => safe.push_str("\\n"),
+            '\r' => safe.push_str("\\r"),
+            '\t' => safe.push_str("\\t"),
+            value if value.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(safe, "\\u{{{:x}}}", u32::from(value));
+            }
+            value => safe.push(value),
+        }
+    }
+    safe
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +175,14 @@ mod tests {
         for valid in ["0", "00001", "1_0", "999999999999999999999999"] {
             assert!(valid_job_id(valid), "rejected valid ID {valid:?}");
         }
+    }
+
+    #[test]
+    fn terminal_text_escapes_controls() {
+        assert_eq!(
+            terminal_text("name\x1b]52;c;bad\x07\r\n"),
+            "name\\x1b]52;c;bad\\u{7}\\r\\n"
+        );
     }
 
     #[test]

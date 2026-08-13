@@ -22,14 +22,14 @@ trap cleanup EXIT HUP INT TERM
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
 case "${DETAIL_SCENARIO:-}" in
-    live) printf '77|RUNNING|live-job|00:02:00|node-a|gpu|start|1|sbatch\n' ;;
+    live) printf '77|offline|RUNNING|live-job|00:02:00|node-a|gpu|start|1|sbatch\n' ;;
     *) : ;;
 esac
 EOF
 cat >"$fake_bin/scontrol" <<'EOF'
 #!/bin/sh
 test "${DETAIL_SCENARIO:-}" = live || exit 31
-printf 'JobId=77 JobName=live-job JobState=RUNNING Reason=None RunTime=00:02:00 TimeLimit=01:00:00 NumNodes=1 NumCPUs=8 Partition=gpu NodeList=node-a Account=lab QOS=normal ReqTRES=cpu=8,mem=16G,gres/gpu:a100=1 AllocTRES=cpu=8,mem=16G,gres/gpu:a100=1 ExitCode=0:0\n'
+printf 'JobId=77 UserId=offline(1000) JobName=live-job JobState=RUNNING Reason=None RunTime=00:02:00 TimeLimit=01:00:00 NumNodes=1 NumCPUs=8 Partition=gpu NodeList=node-a Account=lab QOS=normal ReqTRES=cpu=8,mem=16G,gres/gpu:a100=1 AllocTRES=cpu=8,mem=16G,gres/gpu:a100=1 ExitCode=0:0\n'
 EOF
 cat >"$fake_bin/sstat" <<'EOF'
 #!/bin/sh
@@ -38,7 +38,14 @@ EOF
 cat >"$fake_bin/sacct" <<'EOF'
 #!/bin/sh
 test "${DETAIL_SCENARIO:-}" = terminal || exit 32
-printf '88|done-job|COMPLETED|None|gpu|lab|normal|submit|start|end|00:10:00|600|01:00:00|1|8|8|8|16G|8G|4G|cpu=8,mem=16G,gres/gpu:a100=1|cpu=8,mem=16G,gres/gpu:a100=1|01:00:00|4800|0:0|node-b||\n'
+case "$*" in
+    *'JobID,User,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition,Cluster'*)
+        printf '88|offline|COMPLETED|done-job|00:10:00|end|0:0|8G|cpu=8,mem=16G,gres/gpu:a100=1|gpu|terminal\n'
+        ;;
+    *)
+        printf '88|done-job|COMPLETED|None|gpu|lab|normal|submit|start|end|00:10:00|600|01:00:00|1|8|8|8|16G|8G|4G|cpu=8,mem=16G,gres/gpu:a100=1|cpu=8,mem=16G,gres/gpu:a100=1|01:00:00|4800|0:0|node-b|||offline|terminal\n'
+        ;;
+esac
 EOF
 chmod 755 "$fake_bin"/*
 

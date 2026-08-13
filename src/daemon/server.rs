@@ -71,6 +71,10 @@ fn handle_stream_with_logs(
             if !crate::model::valid_job_id(&id) {
                 bail!("invalid job ID {id}");
             }
+            // Do this before serving the detail cache as well as before a
+            // live fetch: Unix-socket callers must not inherit a prior job
+            // instance merely because its id still has a cache entry.
+            crate::slurm::authorize_exact_job(config, &cluster, &id)?;
             let key = format!("{cluster}\0{id}");
             let reply = resolve_detail_reply(detail_cache, key, force, |previous| {
                 crate::details::fetch(config, &cluster, &id, previous)

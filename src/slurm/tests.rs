@@ -29,19 +29,49 @@ fn arrays_expand_correctly() {
 
 #[test]
 fn terminal_metadata_parsers_cover_active_accounting_steps_and_missing_stdout() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config {
+        local_user: "owner".into(),
+        remote_user: "owner".into(),
+        ssh_host: String::new(),
+        state_path: directory.path().join("state.json"),
+        executable: PathBuf::from("slurm-log"),
+        sbatch_banks: Vec::new(),
+        clusters: vec![crate::config::ClusterConfig {
+            name: "local".into(),
+            controller: None,
+            transport: "local".into(),
+            user: "owner".into(),
+            ssh_host: String::new(),
+            working_directory: directory.path().into(),
+            accounting: true,
+        }],
+    };
     let active = active_terminal_metadata(
+        &config,
+        "local",
         "42",
-        "JobId=42 JobName=train StdOut=/logs/%x-%j.out JobState=RUNNING",
-    );
+        "JobId=42 UserId=owner(1000) JobName=train StdOut=/logs/%x-%j.out JobState=RUNNING",
+    )
+    .unwrap();
     assert_eq!(
         resolve_terminal_metadata(active),
         (Some("/logs/train-42.out".into()), "train".into())
     );
-    let unnamed = active_terminal_metadata("43", "JobId=43 StdOut=/dev/null");
+    let unnamed = active_terminal_metadata(
+        &config,
+        "local",
+        "43",
+        "JobId=43 UserId=owner(1000) StdOut=/dev/null",
+    )
+    .unwrap();
     assert_eq!(resolve_terminal_metadata(unnamed), (None, "job".into()));
 
     let accounting = accounting_terminal_metadata(
-        "320_7.batch|320_7.batch|array task|/logs/%A_%a_%j_%%_%q.out\n",
+        &config,
+        "local",
+        "320_7",
+        "320_7.batch|320_7.batch|owner|array task|/logs/%A_%a_%j_%%_%q.out|local\n",
     )
     .unwrap();
     assert_eq!(
@@ -51,7 +81,42 @@ fn terminal_metadata_parsers_cover_active_accounting_steps_and_missing_stdout() 
             "array task".into()
         )
     );
-    assert!(accounting_terminal_metadata("only|three|fields").is_none());
+    assert!(accounting_terminal_metadata(&config, "local", "320_7", "only|three|fields").is_err());
+}
+
+#[test]
+fn terminal_metadata_rejects_reused_id_or_owner_transition() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config {
+        local_user: "owner".into(),
+        remote_user: "owner".into(),
+        ssh_host: String::new(),
+        state_path: directory.path().join("state.json"),
+        executable: PathBuf::from("slurm-log"),
+        sbatch_banks: Vec::new(),
+        clusters: vec![crate::config::ClusterConfig {
+            name: "local".into(),
+            controller: None,
+            transport: "local".into(),
+            user: "owner".into(),
+            ssh_host: String::new(),
+            working_directory: directory.path().into(),
+            accounting: true,
+        }],
+    };
+    assert!(
+        validate_control_identity(
+            &config,
+            "local",
+            "42",
+            "JobId=42 UserId=other(2000) StdOut=/safe/log"
+        )
+        .is_err()
+    );
+    assert!(
+        accounting_terminal_metadata(&config, "local", "42", "42|42|other|reused|/safe/log|local")
+            .is_err()
+    );
 }
 
 #[test]
@@ -100,7 +165,7 @@ fn queue_parser_classifies_shell_allocations_as_interactive() {
         assert!(interactive_command(command));
     }
     assert!(!interactive_command("python"));
-    assert_eq!(queue_cache_name("cispa"), "queue-v2-cispa");
+    assert_eq!(queue_cache_name("cispa"), "queue-v3-cispa");
     assert_ne!(queue_cache_name("cispa"), "queue-cispa");
 
     let mut accounting_row = vec![Job {
@@ -230,6 +295,7 @@ fn shared_job_cache_round_trips_and_invalidates() {
         sbatch_banks: Vec::new(),
         clusters: vec![crate::config::ClusterConfig {
             name: "cispa".into(),
+            controller: None,
             transport: "ssh".into(),
             user: "remote".into(),
             ssh_host: "host".into(),
@@ -369,3 +435,6 @@ fn decodes_fifty_thousand_cached_jobs_within_budget() {
     assert!(elapsed < Duration::from_millis(250));
     eprintln!("decode 50k cached jobs: {elapsed:?}");
 }
+
+#[path = "tests/identity.rs"]
+mod identity;

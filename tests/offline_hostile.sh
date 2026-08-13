@@ -9,7 +9,11 @@ test_root=$(mktemp -d)
 case "$test_root" in /tmp/*) ;; *) printf 'Unsafe temp path\n' >&2; exit 1 ;; esac
 cleanup() {
     "$binary" daemon stop >/dev/null 2>&1 || true
-    rm -rf "$test_root"
+    if [ "${SLURM_LOG_PRESERVE_FIXTURE:-0}" = 1 ]; then
+        printf 'Preserved hostile fixture: %s\n' "$test_root" >&2
+    else
+        rm -rf "$test_root"
+    fi
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -22,7 +26,7 @@ mkdir -p "$fake_bin" "$home_dir/state"
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$0 $*" >>"$OFFLINE_CALL_LOG"
-printf '101|RUNNING|safe-local|00:01|node|gpu|2026-08-11T12:00:00|1000\n'
+printf '101|RUNNING|safe-local|00:01|node|gpu|2026-08-11T12:00:00|1000||offline-local\n'
 printf '101.batch|RUNNING|step-must-be-rejected|00:01|node\n'
 printf 'bad-id|RUNNING|malformed|00:01|node\n'
 printf '102|PENDING|$(touch %s)|00:00|DependencyNeverSatisfied\n' "$OFFLINE_MARKER"
@@ -32,12 +36,15 @@ cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$0 $*" >>"$OFFLINE_CALL_LOG"
 case "$*" in
-    *'squeue -h'*) printf '201|RUNNING|safe-remote|00:02|gpu01|gpu|2026-08-11T12:00:00|2000\n' ;;
-    *'sacct -j 202'*)
-        printf '202|remote-failure|FAILED|OutOfMemory|gpu|acct|normal|2026-08-11T00:00:00|2026-08-11T00:01:00|2026-08-11T00:04:00|00:03:00|180|01:00:00|1|8|8|8|16Gc|2G|1G|cpu=8,mem=64G,gres/gpu:a100=1|cpu=8,mem=64G,gres/gpu:a100=1|00:01:30|1440|1:0|gpu01||\n'
+    *'squeue -h'*) printf '201|RUNNING|safe-remote|00:02|gpu01|gpu|2026-08-11T12:00:00|2000||offline-remote\n' ;;
+    *'--format=JobID,User,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition,Cluster'*)
+        printf '202|offline-remote|FAILED|remote-failure|00:03|2026-08-11T00:04:00|1:0|4G|gres/gpu=1|gpu|cispa\n'
         ;;
-    *'sacct -X -S'*)
-        printf '202|FAILED|remote-failure|00:03|2026-08-11T00:00:00+02:00|1:0|4G|gres/gpu=1|gpu\n'
+    *' -j 202 '*)
+        printf '202|remote-failure|FAILED|OutOfMemory|gpu|acct|normal|2026-08-11T00:00:00|2026-08-11T00:01:00|2026-08-11T00:04:00|00:03:00|180|01:00:00|1|8|8|8|16Gc|2G|1G|cpu=8,mem=64G,gres/gpu:a100=1|cpu=8,mem=64G,gres/gpu:a100=1|00:01:30|1440|1:0|gpu01|||offline-remote|cispa\n'
+        ;;
+    *' -X -S now-1hour '*)
+        printf '202|FAILED|remote-failure|00:03|2026-08-11T00:00:00+02:00|1:0|4G|gres/gpu=1|gpu|offline-remote|cispa\n'
         printf 'not-a-job|FAILED|rejected|00:03|2026-08-11T00:00:00+02:00\n'
         ;;
     *) printf 'unexpected fake ssh request\n' >&2; exit 23 ;;
@@ -82,7 +89,13 @@ output=$test_root/jobs.json
 "$binary" json --cluster both >"$output"
 grep -q '"id": "101"' "$output"
 grep -q '"id": "201"' "$output"
-grep -q '"id": "202"' "$output"
+grep -q '"id": "202"' "$output" || {
+    printf 'Accounting row missing from mocked output:\n' >&2
+    cat "$output" >&2
+    printf 'Fake command trace:\n' >&2
+    cat "$call_log" >&2
+    exit 1
+}
 grep -q '"exit_code": "1:0"' "$output" || {
     printf 'Extended accounting fields missing from mocked output:\n' >&2
     cat "$output" >&2
@@ -101,7 +114,7 @@ details_output=$test_root/details.txt
 "$binary" details 202 --cluster cispa >"$details_output"
 grep -q 'Allocation: 1 nodes, 8 CPUs, 1 GPUs' "$details_output"
 grep -q 'Utilization: CPU 6.2%, memory 3.1%' "$details_output"
-grep -q 'sacct -j 202' "$call_log"
+grep -q 'sacct .* -j 202' "$call_log"
 
 # Invalid dimensions and option-like hosts must fail before any cluster call.
 : >"$call_log"

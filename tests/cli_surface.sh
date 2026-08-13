@@ -43,27 +43,33 @@ cp "$test_root/bank/train.sbatch" "$test_root/bank-duplicate/train.sbatch"
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
 printf 'squeue %s\n' "$*" >>"$CLI_CALL_LOG"
-printf '101|RUNNING|alpha-run|00:01|alpha-node|cpu|2026-08-12T10:00:00|1000|train.sbatch\n'
-printf '102|PENDING|alpha-blocked|00:00|DependencyNeverSatisfied|cpu|Unknown|10|blocked.sbatch\n'
-printf '103|PENDING|alpha-wait|00:00|Resources|gpu|Unknown|20|wait.sbatch\n'
-printf '104|RUNNING|alpha-shell|00:02|alpha-node|cpu|2026-08-12T10:00:00|30|bash\n'
+case "$*" in
+    *' -j 101 '*'%i|%u|%T'*) printf '101|offline-alpha|RUNNING|alpha-run|00:01|alpha-node|cpu|2026-08-12T10:00:00|1000|train.sbatch\n' ;;
+    *' -j 103 '*'%i|%u|%T'*) printf '103|offline-alpha|PENDING|alpha-wait|00:00|Resources|gpu|Unknown|20|wait.sbatch\n' ;;
+    *)
+        printf '101|RUNNING|alpha-run|00:01|alpha-node|cpu|2026-08-12T10:00:00|1000|train.sbatch|offline-alpha\n'
+        printf '102|PENDING|alpha-blocked|00:00|DependencyNeverSatisfied|cpu|Unknown|10|blocked.sbatch|offline-alpha\n'
+        printf '103|PENDING|alpha-wait|00:00|Resources|gpu|Unknown|20|wait.sbatch|offline-alpha\n'
+        printf '104|RUNNING|alpha-shell|00:02|alpha-node|cpu|2026-08-12T10:00:00|30|bash|offline-alpha\n'
+        ;;
+esac
 EOF
 cat >"$fake_bin/sacct" <<'EOF'
 #!/bin/sh
 printf 'sacct %s\n' "$*" >>"$CLI_CALL_LOG"
 case " $* " in *' -j 99999999 '*) exit 0 ;; esac
-printf '301|COMPLETED|alpha-complete|00:03|%s|0:0|1G|cpu=2,mem=2G|cpu\n' "$CLI_NOW"
-printf '302|FAILED|alpha-failed|00:04|%s|1:0|2G|cpu=2,mem=2G|cpu\n' "$CLI_NOW"
+printf '301|COMPLETED|alpha-complete|00:03|%s|0:0|1G|cpu=2,mem=2G|cpu|offline-alpha|alpha\n' "$CLI_NOW"
+printf '302|FAILED|alpha-failed|00:04|%s|1:0|2G|cpu=2,mem=2G|cpu|offline-alpha|alpha\n' "$CLI_NOW"
 EOF
 cat >"$fake_bin/scontrol" <<'EOF'
 #!/bin/sh
 printf 'scontrol %s\n' "$*" >>"$CLI_CALL_LOG"
 case "$*" in
-    'show job 101')
-        printf 'JobId=101 JobName=alpha-run JobState=RUNNING StdOut=%s/job-101.log\n' "$CLI_ROOT"
+    *'show job -o 101'*)
+        printf 'JobId=101 UserId=offline-alpha(1000) JobName=alpha-run JobState=RUNNING Reason=None RunTime=00:01:00 TimeLimit=01:00:00 NumNodes=1 NumCPUs=4 Partition=cpu NodeList=alpha-node Account=test QOS=normal ReqTRES=cpu=4,mem=8G AllocTRES=cpu=4,mem=8G ExitCode=0:0 StdOut=%s/job-101.log\n' "$CLI_ROOT"
         ;;
-    'show job -o 101')
-        printf 'JobId=101 JobName=alpha-run JobState=RUNNING Reason=None RunTime=00:01:00 TimeLimit=01:00:00 NumNodes=1 NumCPUs=4 Partition=cpu NodeList=alpha-node Account=test QOS=normal ReqTRES=cpu=4,mem=8G AllocTRES=cpu=4,mem=8G ExitCode=0:0\n'
+    *'show job -o 103'*)
+        printf 'JobId=103 UserId=offline-alpha(1000) JobName=alpha-wait JobState=PENDING Reason=Resources Partition=gpu\n'
         ;;
     *) exit 1 ;;
 esac
@@ -78,10 +84,10 @@ cat >"$fake_bin/ssh" <<'EOF'
 printf 'ssh %s\n' "$*" >>"$CLI_CALL_LOG"
 case "$*" in
     *'squeue -h'*)
-        printf '201|RUNNING|beta-run|00:02|beta-node|gpu|2026-08-12T10:00:00|2000|remote.sbatch\n'
+        printf '201|RUNNING|beta-run|00:02|beta-node|gpu|2026-08-12T10:00:00|2000|remote.sbatch|offline-beta\n'
         ;;
-    *'sacct -X -S'*)
-        printf '401|COMPLETED|beta-complete|00:05|%s|0:0|3G|cpu=4,gres/gpu=1|gpu\n' "$CLI_NOW"
+    *'sacct '*' -X -S'*)
+        printf '401|COMPLETED|beta-complete|00:05|%s|0:0|3G|cpu=4,gres/gpu=1|gpu|offline-beta|beta\n' "$CLI_NOW"
         ;;
     *) exit 23 ;;
 esac
@@ -113,7 +119,7 @@ cat >"$fake_bin/sbatch" <<'EOF'
 #!/bin/sh
 printf 'sbatch %s\n' "$*" >>"$CLI_CALL_LOG"
 cat >"$CLI_ROOT/submitted-input"
-printf '777\n'
+printf '777;alpha\n'
 EOF
 chmod 755 "$fake_bin"/*
 
@@ -198,7 +204,7 @@ grep -F alpha-shell "$test_root/blocked" >/dev/null
 "$binary" archive --cluster all >"$test_root/archive"
 grep -F alpha-complete "$test_root/archive" >/dev/null
 grep -F beta-complete "$test_root/archive" >/dev/null
-grep -F 'sacct -X -S' "$calls" | grep -F -- '-u offline-alpha' >/dev/null
+grep -F 'sacct --clusters alpha -X -S' "$calls" | grep -F -- '-u offline-alpha' >/dev/null
 
 # JSON, state read/unread, and explicit active-monitor suppression.
 "$binary" json --cluster all >"$test_root/jobs.json"
@@ -229,7 +235,7 @@ grep -F 'eval.sbatch' "$test_root/environment-bank" >/dev/null
 "$binary" submit Fixtures/train.sbatch --cluster alpha | grep -F 'alpha:777' >/dev/null
 cmp "$test_root/bank/train.sbatch" "$test_root/submitted-input"
 "$binary" cancel 101 103 --cluster alpha | grep -F '2 job(s)' >/dev/null
-grep -F 'scancel 101 103' "$calls" >/dev/null
+grep -F 'scancel --clusters alpha 101 103' "$calls" >/dev/null
 CLI_SCANCEL_FAIL=1 expect_fail cancel 101 --cluster alpha
 expect_fail submit missing.sbatch --cluster alpha
 
@@ -244,7 +250,7 @@ grep -F 'tmux new-session' "$calls" >/dev/null
 grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--pane-follow --lines 7' | grep -F -- '--show-log-warnings alpha 101' >/dev/null
 : >"$calls"
 "$binary" 101 --lines 9
-grep -F 'scontrol show job 101' "$calls" >/dev/null
+grep -F 'scontrol --cluster alpha show job -o 101' "$calls" >/dev/null
 grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--lines 9' >/dev/null
 expect_fail 99999999
 : >"$calls"

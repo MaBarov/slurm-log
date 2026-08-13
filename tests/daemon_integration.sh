@@ -29,8 +29,8 @@ if test "${DAEMON_SCHEDULER_FAIL:-0}" = 1; then
     printf 'offline squeue failure\n' >&2
     exit 71
 fi
-printf '101|RUNNING|daemon-running|00:01|node-a|cpu|2026-08-12T10:00:00|100|run.sbatch\n'
-printf '102|PENDING|daemon-pending|00:00|Resources|gpu|Unknown|20|wait.sbatch\n'
+printf '101|RUNNING|daemon-running|00:01|node-a|cpu|2026-08-12T10:00:00|100|run.sbatch|offline\n'
+printf '102|PENDING|daemon-pending|00:00|Resources|gpu|Unknown|20|wait.sbatch|offline\n'
 EOF
 cat >"$fake_bin/sacct" <<'EOF'
 #!/bin/sh
@@ -39,8 +39,8 @@ if test "${DAEMON_SCHEDULER_FAIL:-0}" = 1; then
     printf 'offline sacct failure\n' >&2
     exit 72
 fi
-printf '301|FAILED|daemon-failed|00:03|%s|1:0|1G|cpu=2,mem=2G|cpu\n' "$DAEMON_NOW"
-printf '302|COMPLETED|daemon-complete|00:04|%s|0:0|1G|cpu=2,mem=2G|cpu\n' "$DAEMON_NOW"
+printf '301|FAILED|daemon-failed|00:03|%s|1:0|1G|cpu=2,mem=2G|cpu|offline|alpha\n' "$DAEMON_NOW"
+printf '302|COMPLETED|daemon-complete|00:04|%s|0:0|1G|cpu=2,mem=2G|cpu|offline|alpha\n' "$DAEMON_NOW"
 EOF
 chmod 755 "$fake_bin/squeue" "$fake_bin/sacct"
 

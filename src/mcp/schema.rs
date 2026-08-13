@@ -139,7 +139,7 @@ pub fn tools(config: &Config) -> Vec<Tool> {
         ),
         mutation_tool(
             "slurm_cancel_job",
-            "Cancel exactly one active cluster-qualified job after expected-name revalidation.",
+            "Cancel exactly one active cluster-qualified ordinary job or one controller-proven array task after expected-name revalidation; array masters and ranges are rejected.",
             object(
                 BTreeMap::from([
                     ("cluster", exact),
@@ -270,6 +270,7 @@ mod tests {
             sbatch_banks: Vec::new(),
             clusters: vec![crate::config::ClusterConfig {
                 name: "alpha".into(),
+                controller: None,
                 transport: "local".into(),
                 user: "alice".into(),
                 ssh_host: String::new(),

@@ -336,7 +336,9 @@ fn workspace_suggestions_and_path_helpers_are_stable() {
         sbatch_banks: Vec::new(),
         clusters: Vec::new(),
     };
-    let suggestions = suggested_workspace_roots(&config);
+    // Keep this unit test hermetic: production setup probes common cluster
+    // mount roots, which may be automounted or temporarily unavailable.
+    let suggestions = suggested_workspace_roots_with_host_storage(&config, false);
     assert_eq!(
         suggestions.iter().collect::<BTreeSet<_>>().len(),
         suggestions.len()

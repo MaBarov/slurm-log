@@ -40,7 +40,7 @@ exit 1
 EOF
 cat >"$test_root/bin/squeue" <<'EOF'
 #!/bin/sh
-printf '987654321|PENDING|local|00:00|Resources|debug|Unknown|1|sbatch\n'
+printf '987654321|PENDING|local|00:00|Resources|debug|Unknown|1|sbatch|offline\n'
 EOF
 cat >"$test_root/bin/sacct" <<'EOF'
 #!/bin/sh

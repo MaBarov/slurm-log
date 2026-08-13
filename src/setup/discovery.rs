@@ -57,6 +57,16 @@ fn bank_kind(path: &Path) -> &'static str {
 }
 
 fn suggested_workspace_roots(current: &Config) -> Vec<PathBuf> {
+    // Hermetic integration builds must not trigger host automounters while
+    // exercising setup with synthetic users. Production still probes the
+    // conventional per-user storage roots.
+    suggested_workspace_roots_with_host_storage(current, !cfg!(slurm_log_test_build))
+}
+
+fn suggested_workspace_roots_with_host_storage(
+    current: &Config,
+    probe_host_storage: bool,
+) -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut candidates = BTreeSet::new();
     if let Some(path) = &home {
@@ -77,7 +87,7 @@ fn suggested_workspace_roots(current: &Config) -> Vec<PathBuf> {
     {
         identities.insert(name);
     }
-    for identity in &identities {
+    for identity in identities.iter().filter(|_| probe_host_storage) {
         // `/storage` and `/storage1` are commonly aliases on cluster login
         // nodes. Prefer `/storage1` so setup does not discover every repo twice
         // or touch a stale compatibility mount.

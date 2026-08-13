@@ -122,6 +122,9 @@ package.daemon_handoff	package_smoke.sh
 package.reinstall_preserves_config	package_smoke.sh
 package.uninstall_preserves_config	package_smoke.sh
 package.uninstall_purge	package_smoke.sh
+package.signed_manifest	package_smoke.sh
+package.release_workflow_privilege_separation	release_workflow.sh
+security.release_authenticity	release_workflow.sh
 security.hostile_scheduler_data	offline_hostile.sh
 security.argument_quoting	offline_hostile.sh
 security.private_files	package_smoke.sh

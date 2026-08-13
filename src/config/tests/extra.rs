@@ -10,6 +10,7 @@ fn valid() -> Config {
         sbatch_banks: Vec::new(),
         clusters: vec![ClusterConfig {
             name: "local".into(),
+            controller: None,
             transport: "local".into(),
             user: "alice".into(),
             ssh_host: String::new(),

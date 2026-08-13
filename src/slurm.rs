@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use std::{
     collections::HashSet,
@@ -15,9 +15,9 @@ use time::{
 };
 
 use crate::{
-    command::{shell_quote, ssh, text},
+    command::{remote_scheduler_command, shell_quote, ssh, text},
     config::Config,
-    model::{Job, valid_job_id},
+    model::{Job, terminal_text, valid_job_id},
     state::Ledger,
 };
 
@@ -68,7 +68,7 @@ fn queue_cache_name(cluster: &str) -> String {
     // The queue payload gained the interactive marker in v2. A versioned
     // namespace prevents long-lived panes from an older binary from
     // continually overwriting the new daemon's cache during rolling updates.
-    format!("queue-v2-{cluster}")
+    format!("queue-v3-{cluster}")
 }
 
 fn cached_jobs(path: &Path, ttl: Duration) -> Option<Vec<Job>> {
@@ -178,7 +178,15 @@ pub fn invalidate_caches(config: &Config) {
         let _ = fs::remove_file(legacy_cache_path(config, legacy));
     }
     for cluster in &config.clusters {
-        for prefix in ["queue", "queue-v2", "recent", "archive"] {
+        for prefix in [
+            "queue",
+            "queue-v2",
+            "queue-v3",
+            "recent",
+            "recent-v2",
+            "archive",
+            "archive-v2",
+        ] {
             let name = format!("{prefix}-{}", cluster.name);
             let _ = fs::remove_file(cache_path(config, &name));
             let _ = fs::remove_file(legacy_cache_path(config, &name));
@@ -189,28 +197,21 @@ pub fn invalidate_caches(config: &Config) {
     }
 }
 
-pub(crate) fn scheduler_text(
-    config: &Config,
-    cluster: &str,
-    program: &str,
-    args: &[&str],
-) -> Result<String> {
-    let target = config.cluster(cluster)?;
-    if target.remote() {
-        let command = std::iter::once(shell_quote(program))
-            .chain(args.iter().map(|argument| shell_quote(argument)))
-            .collect::<Vec<_>>()
-            .join(" ");
-        ssh(&target.ssh_host, &command)
-    } else {
-        text(program, args)
-    }
-}
+include!("slurm/listing_auth.rs");
+
+include!("slurm/controller.rs");
 
 pub fn parse_queue(input: &str, cluster: &str) -> Vec<Job> {
     let mut jobs = Vec::with_capacity(line_count(input).min(MAX_INITIAL_JOBS));
     for line in input.lines() {
-        let mut fields = line.splitn(9, '|').map(str::trim);
+        if jobs.len() == MAX_CACHE_JOBS {
+            break;
+        }
+        let fields: Vec<_> = line.split('|').map(str::trim).collect();
+        if !(4..=9).contains(&fields.len()) {
+            continue;
+        }
+        let mut fields = fields.into_iter();
         let Some((id, state, name, elapsed)) = fields
             .next()
             .zip(fields.next())
@@ -231,14 +232,14 @@ pub fn parse_queue(input: &str, cluster: &str) -> Vec<Job> {
         jobs.push(Job {
             cluster: cluster.into(),
             id: id.into(),
-            state: state.into(),
-            name: name.into(),
-            elapsed: elapsed.into(),
-            reason: reason.into(),
+            state: terminal_text(state),
+            name: terminal_text(name),
+            elapsed: terminal_text(elapsed),
+            reason: terminal_text(reason),
             ended: String::new(),
-            partition: partition.into(),
-            start_time: start_time.into(),
-            priority: priority.into(),
+            partition: terminal_text(partition),
+            start_time: terminal_text(start_time),
+            priority: terminal_text(priority),
             interactive: interactive_command(command),
             ..Job::default()
         });
@@ -256,7 +257,14 @@ fn interactive_command(command: &str) -> bool {
 pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {
     let mut jobs = Vec::with_capacity(line_count(input).min(MAX_INITIAL_JOBS));
     for line in input.lines() {
-        let mut fields = line.splitn(9, '|').map(str::trim);
+        if jobs.len() == MAX_CACHE_JOBS {
+            break;
+        }
+        let fields: Vec<_> = line.split('|').map(str::trim).collect();
+        if !(5..=9).contains(&fields.len()) {
+            continue;
+        }
+        let mut fields = fields.into_iter();
         let Some((id, state, name, elapsed, ended)) = fields
             .next()
             .zip(fields.next())
@@ -273,15 +281,15 @@ pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {
         jobs.push(Job {
             cluster: cluster.into(),
             id: id.into(),
-            state: state.into(),
-            name: name.into(),
-            elapsed: elapsed.into(),
+            state: terminal_text(state),
+            name: terminal_text(name),
+            elapsed: terminal_text(elapsed),
             reason: String::new(),
-            ended: ended.into(),
-            exit_code: fields.next().unwrap_or("").into(),
-            max_rss: fields.next().unwrap_or("").into(),
-            alloc_tres: fields.next().unwrap_or("").into(),
-            partition: fields.next().unwrap_or("").into(),
+            ended: terminal_text(ended),
+            exit_code: terminal_text(fields.next().unwrap_or("")),
+            max_rss: terminal_text(fields.next().unwrap_or("")),
+            alloc_tres: terminal_text(fields.next().unwrap_or("")),
+            partition: terminal_text(fields.next().unwrap_or("")),
             ..Job::default()
         });
     }
@@ -308,17 +316,23 @@ pub fn queued(config: &Config, cluster: &str) -> Result<Vec<Job>> {
     if let Some(jobs) = cached_jobs(&cache, QUEUE_CACHE_TTL) {
         return Ok(jobs);
     }
-    let format = "%i|%T|%j|%M|%R|%P|%S|%Q|%o";
-    let owner = &config.cluster(cluster)?.user;
-    let value = scheduler_text(
-        config,
-        cluster,
-        "squeue",
-        &["-h", "-u", owner, "-o", format],
-    )?;
-    let jobs = parse_queue(&value, cluster);
+    let jobs = query_queued(config, cluster, None)?;
     store_jobs(&cache, &jobs);
     Ok(jobs)
+}
+
+include!("slurm/cancellation.rs");
+fn query_queued(config: &Config, cluster: &str, id: Option<&str>) -> Result<Vec<Job>> {
+    let format = "%i|%T|%j|%M|%R|%P|%S|%Q|%o|%u";
+    let target = config.cluster(cluster)?;
+    let owner = &target.user;
+    let mut args = vec!["-h", "-u", owner.as_str()];
+    if let Some(id) = id {
+        args.extend(["-j", id]);
+    }
+    args.extend(["-o", format]);
+    let value = scheduler_text(config, cluster, "squeue", &args)?;
+    Ok(parse_owned_queue(&value, cluster, owner))
 }
 
 pub fn recent(config: &Config, cluster: &str, archive: bool) -> Result<Vec<Job>> {
@@ -327,8 +341,8 @@ pub fn recent(config: &Config, cluster: &str, archive: bool) -> Result<Vec<Job>>
     }
     let archive_days = archive.then(archive_horizon_days);
     let cache_name = archive_days.map_or_else(
-        || format!("recent-{cluster}"),
-        |days| format!("archive-{cluster}-{days}d"),
+        || format!("recent-v2-{cluster}"),
+        |days| format!("archive-v2-{cluster}-{days}d"),
     );
     let cache = cache_path(config, &cache_name);
     let ttl = if archive {
@@ -344,13 +358,17 @@ pub fn recent(config: &Config, cluster: &str, archive: bool) -> Result<Vec<Job>>
         return Ok(jobs);
     }
     let start = archive_days.map_or_else(|| "now-1hour".into(), archive_start);
+    let target = config.cluster(cluster)?;
     let command = format!(
-        "sacct -X -S {start} -u {} -n -P --format=JobID,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition 2>/dev/null",
-        shell_quote(&config.cluster(cluster)?.user)
+        "sacct {} -X -S {start} -u {} -n -P --format=JobID,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition,User,Cluster 2>/dev/null",
+        controller_option(config, cluster)?,
+        shell_quote(&target.user)
     );
-    let jobs = parse_recent(
+    let jobs = parse_owned_recent(
         &scheduler_text(config, cluster, "sh", &["-c", &command])?,
         cluster,
+        &target.user,
+        target.controller.as_deref(),
     );
     store_jobs(&cache, &jobs);
     Ok(jobs)
@@ -382,6 +400,7 @@ fn archive_start_at(now: OffsetDateTime, days: i64) -> String {
 }
 
 include!("slurm/aggregate.rs");
+include!("slurm/authorization.rs");
 include!("slurm/log_path.rs");
 
 #[cfg(test)]

@@ -17,8 +17,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-log_file=$test_root/job.log
+log_file=$test_root/work/job.log
+foreign_log=$test_root/work/foreign.log
+outside_log=$test_root/outside.log
 printf 'plain first line\nUserWarning: hidden warning\n' >"$log_file"
+printf 'OWNER_ISOLATION_PROOF_SECRET\n' >"$foreign_log"
+printf 'OUTSIDE_STDOUT_PROOF_SECRET\n' >"$outside_log"
 cat >"$test_root/bank/train.sbatch" <<'EOF'
 #!/bin/sh
 #SBATCH --job-name=mcp-train
@@ -29,19 +33,60 @@ cp "$test_root/bank/train.sbatch" "$test_root/original.sbatch"
 
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
+env | grep -Eq '^(SBATCH_|SCANCEL_|SLURM_CLUSTERS=)' && exit 41
 printf 'squeue %s\n' "$*" >>"$MCP_CALLS"
-printf '123|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch\n'
-printf '124|RUNNING|pending-log|00:01|node-b|cpu|2026-08-13T10:00:00|90|pending.sbatch\n'
-printf '125|RUNNING|no-stdout|00:01|node-c|cpu|2026-08-13T10:00:00|80|quiet.sbatch\n'
+if test -f "$MCP_QUEUE_OVERRIDE"; then
+    case " $* " in
+      *" -j "*)
+        case "$*" in
+          *'%i|%u|%T'*) sed 's/^\([^|]*\)|/\1|offline|/' "$MCP_QUEUE_OVERRIDE" ;;
+          *'|%u'*) sed 's/$/|offline/' "$MCP_QUEUE_OVERRIDE" ;;
+          *) cat "$MCP_QUEUE_OVERRIDE" ;;
+        esac
+        ;;
+      *'|%u'*) sed 's/$/|offline/' "$MCP_QUEUE_OVERRIDE" ;;
+      *) cat "$MCP_QUEUE_OVERRIDE" ;;
+    esac
+    exit 0
+fi
+case " $* " in
+  *" -j "*)
+    case "$*" in
+      *'%i|%u|%T'*)
+        printf '123|offline|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch\n'
+        printf '124|offline|RUNNING|pending-log|00:01|node-b|cpu|2026-08-13T10:00:00|90|pending.sbatch\n'
+        printf '125|offline|RUNNING|no-stdout|00:01|node-c|cpu|2026-08-13T10:00:00|80|quiet.sbatch\n'
+        printf '126|offline|RUNNING|outside-stdout|00:01|node-d|cpu|2026-08-13T10:00:00|70|outside.sbatch\n'
+        printf '127|offline|RUNNING|array-master|00:01|node-a|gpu|2026-08-13T10:00:00|60|array.sbatch\n'
+        ;;
+      *'|%u'*)
+        printf '123|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch|offline\n'
+        printf '124|RUNNING|pending-log|00:01|node-b|cpu|2026-08-13T10:00:00|90|pending.sbatch|offline\n'
+        printf '125|RUNNING|no-stdout|00:01|node-c|cpu|2026-08-13T10:00:00|80|quiet.sbatch|offline\n'
+        printf '126|RUNNING|outside-stdout|00:01|node-d|cpu|2026-08-13T10:00:00|70|outside.sbatch|offline\n'
+        printf '127|RUNNING|array-master|00:01|node-a|gpu|2026-08-13T10:00:00|100|array.sbatch|offline\n'
+        ;;
+      *) exit 42 ;;
+    esac
+    exit 0
+    ;;
+esac
+printf '123|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch|offline\n'
+printf '124|RUNNING|pending-log|00:01|node-b|cpu|2026-08-13T10:00:00|90|pending.sbatch|offline\n'
+printf '125|RUNNING|no-stdout|00:01|node-c|cpu|2026-08-13T10:00:00|80|quiet.sbatch|offline\n'
+printf '126|RUNNING|outside-stdout|00:01|node-d|cpu|2026-08-13T10:00:00|70|outside.sbatch|offline\n'
 EOF
 cat >"$fake_bin/scontrol" <<'EOF'
 #!/bin/sh
+env | grep -Eq '^(SBATCH_|SCANCEL_|SLURM_CLUSTERS=)' && exit 41
 printf 'scontrol %s\n' "$*" >>"$MCP_CALLS"
 case "$*" in
-  *124*) printf 'JobId=124 JobName=pending-log JobState=RUNNING StdOut=%s/missing.log\n' "$(dirname "$MCP_LOG_FILE")" ;;
-  *125*) printf 'JobId=125 JobName=no-stdout JobState=RUNNING StdOut=/dev/null\n' ;;
-  *999*) exit 1 ;;
-  *) printf 'JobId=123 JobName=mcp-train JobState=RUNNING Reason=None Partition=gpu StdOut=%s ExitCode=0:0 Dependency=None NumNodes=1 NumCPUs=2\n' "$MCP_LOG_FILE" ;;
+  *127*) printf 'JobId=127 UserId=offline(1000) JobName=array-master JobState=RUNNING ArrayJobId=127 ArrayTaskId=0-9\n' ;;
+  *124*) printf 'JobId=124 UserId=offline(1000) JobName=pending-log JobState=RUNNING StdOut=%s/missing.log\n' "$(dirname "$MCP_LOG_FILE")" ;;
+  *125*) printf 'JobId=125 UserId=offline(1000) JobName=no-stdout JobState=RUNNING StdOut=/dev/null\n' ;;
+  *126*) printf 'JobId=126 UserId=offline(1000) JobName=outside-stdout JobState=RUNNING StdOut=%s/../outside.log\n' "$(dirname "$MCP_LOG_FILE")" ;;
+  *999*) printf 'JobId=999 UserId=other(2000) JobName=foreign JobState=RUNNING StdOut=%s/foreign.log\n' "$(dirname "$MCP_LOG_FILE")" ;;
+  *) printf 'JobId=123 UserId=offline(1000) JobName=mcp-train JobState=RUNNING Reason=None Partition=gpu StdOut=%s ExitCode=0:0 Dependency=None NumNodes=1 NumCPUs=2\n' "$MCP_LOG_FILE" ;;
 esac
 EOF
 cat >"$fake_bin/sstat" <<'EOF'
@@ -50,22 +95,53 @@ exit 0
 EOF
 cat >"$fake_bin/sbatch" <<'EOF'
 #!/bin/sh
+env | grep -Eq '^(SBATCH_|SCANCEL_|SLURM_CLUSTERS=)' && exit 41
 cat >"$MCP_SUBMITTED"
 printf '9001\n'
 EOF
 cat >"$fake_bin/scancel" <<'EOF'
 #!/bin/sh
+env | grep -Eq '^(SBATCH_|SCANCEL_|SLURM_CLUSTERS=)' && exit 41
 printf '%s\n' "$*" >"$MCP_CANCELLED"
 EOF
 cat >"$fake_bin/tmux" <<'EOF'
 #!/bin/sh
+test -f "$MCP_TMUX_FAIL" && exit 1
+if test -f "$MCP_TMUX_MALFORMED"; then
+    printf 'not-a-slurm-workspace|1|alpha|123\n'
+    exit 0
+fi
 printf 'slurm-logs-alpha|1|alpha|123\n'
 EOF
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 for remote do :; done
 printf 'ssh %s\n' "$remote" >>"$MCP_CALLS"
-sh -c "$remote"
+case "$remote" in
+  *'SLURMLOG|'*)
+    size=$(wc -c <"$MCP_LOG_FILE")
+    modified=$(stat -c %Y "$MCP_LOG_FILE")
+    printf 'SLURMLOG|1|2|%s|%s\n' "$size" "$modified"
+    case "$remote" in
+      *'tail -c '*) cat "$MCP_LOG_FILE" ;;
+    esac
+    ;;
+  *'squeue '*)
+    case "$remote" in
+      *'%i|%u|%T'*) printf '123|offline|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch\n' ;;
+      *'|%u'*) printf '123|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch|offline\n' ;;
+      *) exit 42 ;;
+    esac
+    ;;
+  *'scontrol '*)
+    printf 'JobId=123 UserId=offline(1000) JobName=mcp-train JobState=RUNNING Reason=None Partition=gpu StdOut=%s ExitCode=0:0 Dependency=None NumNodes=1 NumCPUs=2\n' "$MCP_LOG_FILE"
+    ;;
+  *'sstat '*) : ;;
+  *)
+    printf 'unexpected fake SSH request: %s\n' "$remote" >&2
+    exit 73
+    ;;
+esac
 EOF
 chmod 755 "$fake_bin/squeue" "$fake_bin/scontrol" "$fake_bin/sstat" \
     "$fake_bin/sbatch" "$fake_bin/scancel" "$fake_bin/tmux" "$fake_bin/ssh"
@@ -89,6 +165,12 @@ export MCP_LOG_FILE=$log_file
 export MCP_CALLS=$test_root/calls
 export MCP_SUBMITTED=$test_root/submitted
 export MCP_CANCELLED=$test_root/cancelled
+export MCP_QUEUE_OVERRIDE=$test_root/queue-override
+export MCP_TMUX_FAIL=$test_root/tmux-fail
+export MCP_TMUX_MALFORMED=$test_root/tmux-malformed
+export SBATCH_JOB_NAME=ambient-override
+export SCANCEL_FULL=1
+export SLURM_CLUSTERS=wrong-cluster
 : >"$MCP_CALLS"
 
 requests=$test_root/requests
@@ -138,6 +220,16 @@ grep -E 'squeue .* -u offline ' "$MCP_CALLS" >/dev/null
 request '{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"slurm_list_clusters","arguments":{}}}' | grep -F '"transport":"ssh"' >/dev/null
 request '{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"slurm_inspect_job","arguments":{"cluster":"alpha","job_id":"123"}}}' | grep -F '"dependencies":[]' >/dev/null
 request '{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"slurm_workspace_context","arguments":{}}}' | grep -F 'slurm-logs-alpha' >/dev/null
+touch "$MCP_TMUX_FAIL"
+request '{"jsonrpc":"2.0","id":721,"method":"tools/call","params":{"name":"slurm_workspace_context","arguments":{}}}' | grep -F '"workspaces":[]' >/dev/null
+rm "$MCP_TMUX_FAIL"
+chmod 644 "$fake_bin/tmux"
+request '{"jsonrpc":"2.0","id":722,"method":"tools/call","params":{"name":"slurm_workspace_context","arguments":{}}}' | grep -F '"workspaces":[]' >/dev/null
+chmod 755 "$fake_bin/tmux"
+touch "$MCP_TMUX_MALFORMED"
+request '{"jsonrpc":"2.0","id":723,"method":"tools/call","params":{"name":"slurm_workspace_context","arguments":{}}}' | grep -F '"focused_jobs":[]' >/dev/null
+rm "$MCP_TMUX_MALFORMED"
+request '{"jsonrpc":"2.0","id":724,"method":"tools/call","params":{"name":"slurm_unknown_tool","arguments":{}}}' | grep -F 'unknown tool slurm_unknown_tool' >/dev/null
 script_result=$(request '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"slurm_list_scripts","arguments":{"cluster":"alpha","search":"train","limit":1}}}')
 printf '%s\n' "$script_result" | grep -F 'Bank/train.sbatch' >/dev/null
 printf '%s\n' "$script_result" | grep -F '1 matching script(s), 0 warning(s)' >/dev/null
@@ -174,6 +266,8 @@ request '{"jsonrpc":"2.0","id":76,"method":"tools/call","params":{"name":"slurm_
 
 # Resources/templates expose only concrete slurm-log URIs.
 request '{"jsonrpc":"2.0","id":9,"method":"resources/list","params":{}}' | grep -F 'slurm-log://jobs/alpha/123' >/dev/null
+request '{"jsonrpc":"2.0","id":901,"method":"resources/list","params":{"cursor":"r:1"}}' | grep -F 'slurm-log://clusters/alpha/jobs' >/dev/null
+request '{"jsonrpc":"2.0","id":902,"method":"resources/list","params":{"cursor":"bad"}}' | grep -F 'invalid resource cursor' >/dev/null
 request '{"jsonrpc":"2.0","id":10,"method":"resources/templates/list","params":{}}' | grep -F 'slurm-log://jobs/{cluster}/{job_id}/log' >/dev/null
 request '{"jsonrpc":"2.0","id":11,"method":"resources/read","params":{"uri":"file:///etc/passwd"}}' | grep -F '"code":-32602' >/dev/null
 request '{"jsonrpc":"2.0","id":90,"method":"resources/read","params":{"uri":"slurm-log://clusters"}}' | grep -F 'alpha' >/dev/null
@@ -193,7 +287,13 @@ test -n "$cursor"
 request '{"jsonrpc":"2.0","id":120,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"beta","job_id":"123","filter":"warnings"}}}' | grep -F 'hidden warning' >/dev/null
 request '{"jsonrpc":"2.0","id":121,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"124"}}}' | grep -F '"status":"pending_log"' >/dev/null
 request '{"jsonrpc":"2.0","id":122,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"125"}}}' | grep -F '"status":"no_stdout"' >/dev/null
-request '{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"999"}}}' | grep -F '"status":"accounting_unavailable"' >/dev/null
+request '{"jsonrpc":"2.0","id":1220,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"123","filter":"bogus"}}}' | grep -F 'invalid log filter bogus' >/dev/null
+outside=$(request '{"jsonrpc":"2.0","id":1221,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"126"}}}')
+printf '%s\n' "$outside" | grep -F '"status":"no_stdout"' >/dev/null
+! printf '%s\n' "$outside" | grep -F 'OUTSIDE_STDOUT_PROOF_SECRET' >/dev/null
+foreign=$(request '{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"999"}}}')
+printf '%s\n' "$foreign" | grep -F 'owned by the configured' >/dev/null
+! printf '%s\n' "$foreign" | grep -F 'OWNER_ISOLATION_PROOF_SECRET' >/dev/null
 printf 'Traceback (most recent call last):\nValueError: appended\n' >>"$log_file"
 sleep 6
 incremental=$(request "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_read_log\",\"arguments\":{\"cluster\":\"alpha\",\"job_id\":\"123\",\"cursor\":\"$cursor\",\"filter\":\"all\"}}}")
@@ -213,6 +313,12 @@ printf '%s\n' "$rotated" | grep -F 'rotated generation' >/dev/null
 printf 'CUDA out of memory on rank 0\nNCCL error\n' >>"$log_file"
 sleep 6
 request '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"slurm_search_log","arguments":{"cluster":"alpha","job_id":"123","pattern":"(a+)+$","regex":true,"max_matches":5}}}' | grep -F '"scan_limit_bytes":4194304' >/dev/null
+literal_search=$(request '{"jsonrpc":"2.0","id":151,"method":"tools/call","params":{"name":"slurm_search_log","arguments":{"cluster":"alpha","job_id":"123","pattern":"CUDA out of memory","context_lines":1,"max_matches":1}}}')
+printf '%s\n' "$literal_search" | grep -F '"match_count":1' >/dev/null
+printf '%s\n' "$literal_search" | grep -F '"matched":true' >/dev/null
+printf '%s\n' "$literal_search" | grep -F 'NCCL error' >/dev/null
+regex_search=$(request '{"jsonrpc":"2.0","id":152,"method":"tools/call","params":{"name":"slurm_search_log","arguments":{"cluster":"alpha","job_id":"123","pattern":"NCCL[ ]+error","regex":true,"context_lines":0}}}')
+printf '%s\n' "$regex_search" | grep -F '"match_count":1' >/dev/null
 request '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"slurm_diagnose_job","arguments":{"cluster":"alpha","job_id":"123"}}}' | grep -F 'cuda_out_of_memory' >/dev/null
 
 # Submission is digest-bound, one-use, exact-stdin only; cancellation revalidates name.
@@ -228,8 +334,12 @@ request "{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"tools/call\",\"params\":{\"
 cmp "$test_root/bank/train.sbatch" "$MCP_SUBMITTED"
 request "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_submit_job\",\"arguments\":{\"preview_token\":\"$token\"}}}" | grep -F 'already consumed' >/dev/null
 request '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"slurm_cancel_job","arguments":{"cluster":"alpha","job_id":"123","expected_job_name":"wrong"}}}' | grep -F 'job name changed' >/dev/null
+request '{"jsonrpc":"2.0","id":201,"method":"tools/call","params":{"name":"slurm_cancel_job","arguments":{"cluster":"alpha","job_id":"127","expected_job_name":"array-master"}}}' | grep -F 'array master' >/dev/null
+printf '123|RUNNING|replaced-name|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch\n' >"$MCP_QUEUE_OVERRIDE"
+request '{"jsonrpc":"2.0","id":202,"method":"tools/call","params":{"name":"slurm_cancel_job","arguments":{"cluster":"alpha","job_id":"123","expected_job_name":"mcp-train"}}}' | grep -F 'disagree about job name or state' >/dev/null
+rm "$MCP_QUEUE_OVERRIDE"
 request '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"slurm_cancel_job","arguments":{"cluster":"alpha","job_id":"123","expected_job_name":"mcp-train"}}}' | grep -F '"cancelled":true' >/dev/null
-test "$(cat "$MCP_CANCELLED")" = 123
+test "$(cat "$MCP_CANCELLED")" = '--clusters alpha 123'
 audit=$state_dir/mcp-audit.jsonl
 test "$(stat -c %a "$audit")" = 600
 grep -F '"digest":"' "$audit" >/dev/null
@@ -237,6 +347,7 @@ grep -F '"digest":"' "$audit" >/dev/null
 
 # A concrete log subscription emits only after change, then can be removed.
 request '{"jsonrpc":"2.0","id":210,"method":"resources/subscribe","params":{"uri":"slurm-log://clusters"}}' | grep -F '"result":{}' >/dev/null
+request '{"jsonrpc":"2.0","id":2101,"method":"resources/subscribe","params":{"uri":"slurm-log://clusters"}}' | grep -F '"result":{}' >/dev/null
 request '{"jsonrpc":"2.0","id":211,"method":"resources/subscribe","params":{"uri":"slurm-log://clusters/alpha/jobs"}}' | grep -F '"result":{}' >/dev/null
 request '{"jsonrpc":"2.0","id":212,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/123"}}' | grep -F '"result":{}' >/dev/null
 request '{"jsonrpc":"2.0","id":213,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/123/details"}}' | grep -F '"result":{}' >/dev/null
@@ -245,8 +356,7 @@ request '{"jsonrpc":"2.0","id":214,"method":"resources/unsubscribe","params":{"u
 request '{"jsonrpc":"2.0","id":215,"method":"resources/unsubscribe","params":{"uri":"slurm-log://clusters/alpha/jobs"}}' | grep -F '"result":{}' >/dev/null
 request '{"jsonrpc":"2.0","id":216,"method":"resources/unsubscribe","params":{"uri":"slurm-log://jobs/alpha/123"}}' | grep -F '"result":{}' >/dev/null
 request '{"jsonrpc":"2.0","id":217,"method":"resources/unsubscribe","params":{"uri":"slurm-log://jobs/alpha/123/details"}}' | grep -F '"result":{}' >/dev/null
-request '{"jsonrpc":"2.0","id":218,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/999"}}' | grep -F '"result":{}' >/dev/null
-receive | grep -F '"method":"notifications/resources/updated"' >/dev/null
+request '{"jsonrpc":"2.0","id":218,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/999"}}' | grep -F 'owned by the configured' >/dev/null
 request '{"jsonrpc":"2.0","id":22,"method":"resources/subscribe","params":{"uri":"slurm-log://jobs/alpha/123/log"}}' | grep -F '"result":{}' >/dev/null
 sleep 1
 printf 'subscription append\n' >>"$log_file"
@@ -266,40 +376,7 @@ wait "$server_pid"
 test ! -s "$test_root/mcp.err"
 awk 'substr($0,1,1) != "{" { exit 1 }' "$transcript"
 
-# Setup is non-destructive when non-interactive and unregister is verified.
-cat >"$fake_bin/codex" <<'EOF'
-#!/bin/sh
-printf 'codex %s\n' "$*" >>"$MCP_CLIENT_CALLS"
-case "$*" in
-  'mcp get slurm-log --json') test -f "$MCP_CLIENT_STATE/codex" ;;
-  'mcp add slurm-log -- '*) touch "$MCP_CLIENT_STATE/codex" ;;
-  'mcp remove slurm-log') rm -f "$MCP_CLIENT_STATE/codex" ;;
-  *) exit 2 ;;
-esac
-EOF
-cat >"$fake_bin/claude" <<'EOF'
-#!/bin/sh
-printf 'claude %s\n' "$*" >>"$MCP_CLIENT_CALLS"
-case "$*" in
-  'mcp get slurm-log') test -f "$MCP_CLIENT_STATE/claude" ;;
-  'mcp add --scope user slurm-log -- '*) touch "$MCP_CLIENT_STATE/claude" ;;
-  'mcp remove --scope user slurm-log') rm -f "$MCP_CLIENT_STATE/claude" ;;
-  *) exit 2 ;;
-esac
-EOF
-chmod 755 "$fake_bin/codex" "$fake_bin/claude"
-export MCP_CLIENT_CALLS=$test_root/client-calls
-export MCP_CLIENT_STATE=$test_root/clients
-: >"$MCP_CLIENT_CALLS"
-"$binary" mcp setup </dev/null >"$test_root/setup.out"
-grep -F 'codex mcp add slurm-log -- ' "$test_root/setup.out" >/dev/null
-grep -F 'claude mcp add --scope user slurm-log -- ' "$test_root/setup.out" >/dev/null
-grep -F '"mcpServers"' "$test_root/setup.out" >/dev/null
-! grep -F ' mcp add ' "$MCP_CLIENT_CALLS" >/dev/null
-touch "$MCP_CLIENT_STATE/codex" "$MCP_CLIENT_STATE/claude"
-"$binary" mcp setup </dev/null | grep -F 'left unchanged' >/dev/null
-"$binary" mcp unregister >/dev/null
-test ! -e "$MCP_CLIENT_STATE/codex" && test ! -e "$MCP_CLIENT_STATE/claude"
+# Doctor uses the same fake scheduler/daemon boundary as the MCP server.
 mkdir -p "$test_root/doctor-state"
 sed "s|$state_dir/state.json|$test_root/doctor-state/state.json|" \
     "$test_root/config.json" >"$test_root/doctor-config.json"
@@ -326,7 +403,8 @@ while test "$index" -le 40; do
     index=$((index + 1))
 done
 for pid in $pids; do wait "$pid"; done
-test "$(grep -c '^squeue .* -u offline ' "$MCP_CALLS")" -eq 1
-test "$(grep -c '^scontrol show job 123' "$MCP_CALLS")" -eq 1
+test "$(grep '^squeue ' "$MCP_CALLS" | grep -vc ' -j ')" -eq 1
+test "$(grep -c '^squeue .* -j 123 ' "$MCP_CALLS")" -ge 40
+test "$(grep -c '^scontrol .*show job.*123' "$MCP_CALLS")" -ge 40
 
-printf 'mcp_server: ok (stdio, tools, resources, logs, mutations, subscriptions, setup, sharing; fully offline)\n'
+printf 'mcp_server: ok (stdio, tools, resources, logs, mutations, subscriptions, sharing; fully offline)\n'

@@ -14,12 +14,23 @@ impl McpServer {
         &self,
         request: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
+        let start = request
+            .and_then(|value| value.cursor)
+            .map(|cursor| parse_resource_cursor(&cursor))
+            .transpose()?
+            .unwrap_or(0);
+        let needed = start.saturating_add(RESOURCE_PAGE).saturating_add(1);
         let mut resources = vec![json_resource(
             "slurm-log://clusters",
             "clusters",
             "Configured clusters without SSH credentials",
         )];
-        for cluster in &self.config.clusters {
+        let mut stopped_early = false;
+        'clusters: for cluster in &self.config.clusters {
+            if resources.len() >= needed {
+                stopped_early = true;
+                break;
+            }
             resources.push(json_resource(
                 &format!("slurm-log://clusters/{}/jobs", cluster.name),
                 &format!("{} jobs", cluster.name),
@@ -33,6 +44,10 @@ impl McpServer {
             for job in
                 crate::slurm::visible_jobs(jobs, &ledger, crate::slurm::HistoryMode::Live, true)
             {
+                if resources.len() >= needed {
+                    stopped_early = true;
+                    break 'clusters;
+                }
                 resources.push(json_resource(
                     &format!("slurm-log://jobs/{}/{}", cluster.name, job.id),
                     &format!("{}:{} {}", cluster.name, job.id, job.name),
@@ -40,15 +55,10 @@ impl McpServer {
                 ));
             }
         }
-        let start = request
-            .and_then(|value| value.cursor)
-            .map(|cursor| parse_resource_cursor(&cursor))
-            .transpose()?
-            .unwrap_or(0)
-            .min(resources.len());
+        let start = start.min(resources.len());
         let end = (start + RESOURCE_PAGE).min(resources.len());
         let mut result = ListResourcesResult::with_all_items(resources[start..end].to_vec());
-        if end < resources.len() {
+        if stopped_early || end < resources.len() {
             result.next_cursor = Some(format!("r:{end}"));
         }
         Ok(result)
@@ -70,6 +80,7 @@ impl McpServer {
                 job_args(cluster, id, |args| self.inspect_job(args))?
             }
             ResourceRoute::Details(cluster, id) => {
+                crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
                 let details = crate::daemon::job_details(&self.config, cluster, id, false)?;
                 json!({"ok":true,"cluster":cluster,"job_id":id,"details":details})
             }
@@ -138,6 +149,15 @@ impl<'a> ResourceRoute<'a> {
     pub(crate) fn is_log(&self) -> bool {
         matches!(self, Self::Log(_, _))
     }
+
+    pub(crate) fn exact_job(&self) -> Option<(&'a str, &'a str)> {
+        match self {
+            Self::Job(cluster, id) | Self::Details(cluster, id) | Self::Log(cluster, id) => {
+                Some((cluster, id))
+            }
+            Self::Clusters | Self::ClusterJobs(_) => None,
+        }
+    }
 }
 
 fn validate_job(config: &crate::config::Config, cluster: &str, id: &str) -> Result<()> {
@@ -187,6 +207,7 @@ mod tests {
             sbatch_banks: Vec::new(),
             clusters: vec![crate::config::ClusterConfig {
                 name: "one".into(),
+                controller: None,
                 transport: "local".into(),
                 user: "a".into(),
                 ssh_host: String::new(),

@@ -22,13 +22,19 @@ cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$DETAILS_PANE_CALL_LOG"
 case "$*" in
+    *'squeue -h'*' -j 42 '*)
+        printf '42|offline|PENDING|offline-job|00:00|Resources|gpu|Unknown|1|sbatch\n'
+        ;;
+    *'squeue -h'*' -j 3209343_2 '*)
+        printf '3209343_2|offline|RUNNING|array-job|00:01:30|node-1|gpu|2026-08-12T10:00:00|2|sbatch\n'
+        ;;
     *'squeue -h'*)
-        printf '42|PENDING|offline-job|00:00|Resources|gpu|Unknown|1\n3209343_2|RUNNING|array-job|00:01:30|node-1|gpu|2026-08-12T10:00:00|2\n'
+        printf '42|PENDING|offline-job|00:00|Resources|gpu|Unknown|1|offline\n3209343_2|RUNNING|array-job|00:01:30|node-1|gpu|2026-08-12T10:00:00|2|offline\n'
         ;;
-    *'scontrol show job -o 3209343_2'*)
-        printf 'JobId=3209343_2 JobName=array-job JobState=RUNNING Reason=None RunTime=00:01:30 TimeLimit=01:00:00 NumNodes=1 NumCPUs=4 Partition=gpu NodeList=node-1 Account=lab QOS=normal ReqTRES=cpu=4,mem=8G,gres/gpu=2 AllocTRES=cpu=4,mem=8G,gres/gpu=2 ExitCode=0:0\n'
+    *'show job -o 3209343_2'*)
+        printf 'JobId=3209343_2 UserId=offline(1000) JobName=array-job JobState=RUNNING Reason=None RunTime=00:01:30 TimeLimit=01:00:00 NumNodes=1 NumCPUs=4 Partition=gpu NodeList=node-1 Account=lab QOS=normal ReqTRES=cpu=4,mem=8G,gres/gpu=2 AllocTRES=cpu=4,mem=8G,gres/gpu=2 ExitCode=0:0\n'
         ;;
-    *'sstat -a -j 3209343_2'*)
+    *'sstat '*' -a -j 3209343_2'*)
         printf '3209343_2.batch|4|cpu=4,mem=8G,gres/gpu=2|00:01:00|2G|1G|gres/gpuutil=70|gres/gpumem=3G\n'
         ;;
     *sacct*) exit 91 ;;
@@ -36,6 +42,8 @@ case "$*" in
 esac
 EOF
 chmod 755 "$fake_bin/ssh"
+export PATH="$fake_bin:/usr/local/bin:/usr/bin:/bin"
+export DETAILS_PANE_CALL_LOG=$call_log
 config=$test_root/config.json
 cat >"$config" <<EOF
 {"clusters":[{"name":"cispa","transport":"ssh","user":"offline","sshHost":"offline.invalid","workingDirectory":"$test_root","accounting":true}],"statePath":"$test_root/state.json"}

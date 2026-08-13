@@ -20,8 +20,11 @@ mkdir -p "$fake_bin" "$test_root/home" "$test_root/state"
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 case "$*" in
-    *'scontrol show job 42'*)
-        printf 'JobId=42 JobName=remote-train JobState=RUNNING StdOut=/logs/train-%%.log\n'
+    *'squeue -h'*' -j 42 '*)
+        printf '42|offline|RUNNING|remote-train|00:01|node-a|gpu|now|1|sbatch\n'
+        ;;
+    *'show job -o 42'*)
+        printf 'JobId=42 UserId=offline(1000) JobName=remote-train JobState=RUNNING StdOut=/logs/train-%%.log\n'
         ;;
     *'tail -n 7 -F'*)
         printf 'FutureWarning: hidden\n  warnings.warn(old)\nremote line\nValueError: retained\n'
@@ -46,9 +49,13 @@ grep -F 'ValueError: retained' "$test_root/remote.out" >/dev/null
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 case "$*" in
-    *'scontrol show job 46'*) exit 1 ;;
-    *'JobIDRaw,JobID,JobName,StdOut'*)
-        printf '46|46|accounted|/logs/accounted.log\n'
+    *'squeue -h'*' -j 46 '*) exit 0 ;;
+    *'--format=JobID,User,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition,Cluster'*)
+        printf '46|offline|COMPLETED|accounted|00:01|now|0:0|||cpu|accounted\n'
+        ;;
+    *'show job -o 46'*) exit 1 ;;
+    *'JobIDRaw,JobID,User,JobName,StdOut,Cluster'*)
+        printf '46|46|offline|accounted|/logs/accounted.log|accounted\n'
         ;;
     *'tail -n 5 -F'*accounted.log*) printf 'accounting fallback line\n' ;;
     *) exit 23 ;;
@@ -67,11 +74,14 @@ grep -F 'accounting fallback line' "$test_root/accounting.out" >/dev/null
 # Local registration lag followed by graceful SIGINT child teardown.
 cat >"$fake_bin/scontrol" <<EOF
 #!/bin/sh
-printf 'JobId=43 JobName=local-train JobState=RUNNING StdOut=$test_root/pending.log\n'
+printf 'JobId=43 UserId=offline(1000) JobName=local-train JobState=RUNNING StdOut=$test_root/pending.log\n'
 EOF
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
-printf '43|RUNNING|local-train|00:01|node-a|cpu|now|1|sbatch\n'
+case "$*" in
+    *' -j 43 '*) printf '43|offline|RUNNING|local-train|00:01|node-a|cpu|now|1|sbatch\n' ;;
+    *) printf '43|RUNNING|local-train|00:01|node-a|cpu|now|1|sbatch|offline\n' ;;
+esac
 EOF
 chmod 755 "$fake_bin/scontrol" "$fake_bin/squeue"
 local_config=$test_root/local.json
@@ -104,11 +114,14 @@ follower_pid=
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 case "$*" in
-    *'scontrol show job 44'*)
-        printf 'JobId=44 JobName=shell JobState=RUNNING BatchFlag=0 Command=bash Partition=gpu NodeList=node-a\n'
+    *'squeue -h'*' -j 44 '*)
+        printf '44|offline|RUNNING|shell|00:03|node-a|gpu|now|1|bash\n'
+        ;;
+    *'show job -o 44'*)
+        printf 'JobId=44 UserId=offline(1000) JobName=shell JobState=RUNNING BatchFlag=0 Command=bash Partition=gpu NodeList=node-a\n'
         ;;
     *'squeue -h'*)
-        printf '44|RUNNING|shell|00:03|node-a|gpu|now|1|bash\n'
+        printf '44|RUNNING|shell|00:03|node-a|gpu|now|1|bash|offline\n'
         ;;
     *) exit 23 ;;
 esac
@@ -136,7 +149,7 @@ cat >"$fake_bin/ssh" <<'EOF'
 case "$*" in
     *'scontrol show job 45'*) exit 1 ;;
     *'squeue -h'*)
-        printf '45|FAILED|early-failure|00:00|Dependency|gpu|Unknown|1|sbatch\n'
+        printf '45|FAILED|early-failure|00:00|Dependency|gpu|Unknown|1|sbatch|offline\n'
         ;;
     *) exit 23 ;;
 esac
@@ -164,7 +177,7 @@ cat >"$fake_bin/ssh" <<'EOF'
 case "$*" in
     *'scontrol show job 47'*) exit 1 ;;
     *'squeue -h'*)
-        printf '47|COMPLETED|short-job|00:01|None|cpu|Unknown|1|sbatch\n'
+        printf '47|COMPLETED|short-job|00:01|None|cpu|Unknown|1|sbatch|offline\n'
         ;;
     *) exit 23 ;;
 esac

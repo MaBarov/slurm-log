@@ -19,17 +19,20 @@ Requirements:
 - Rust/Cargo only when rebuilding instead of using the bundled Linux binary
 - `sacct` only on clusters where accounting is enabled
 
-Install the latest verified x86-64 Linux release directly from GitHub:
+Install a signed x86-64 Linux release only after obtaining its Ed25519 public
+key PEM from an independent, trusted channel (for example, a reviewed source
+commit or an organization-controlled deployment record):
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/MaBarov/slurm-log/main/install.sh
-sh install.sh
+sh install.sh --release-public-key /secure/path/slurm-log-release-public.pem
 ```
 
-The script downloads only the release binary from the archive, verifies its
-published SHA-256 checksum, installs it for the current Unix user, and starts
-personal setup. It does not require Rust. To pin a release, use
-`sh install.sh --version v0.2.3`.
+The installer requires that PEM for every prebuilt download. It verifies the
+detached manifest signature before downloading the archive, then checks the
+signed size and digest before extraction or starting the candidate binary. Do
+not obtain the PEM from the same release URL, archive, or mutable mirror being
+verified. The script does not require Rust. To pin a release, use
+`sh install.sh --version v0.2.4 --release-public-key /secure/path/key.pem`.
 
 Alternatively, extract a shared release archive and run:
 
@@ -143,17 +146,22 @@ banks, submission, and cancellation. Job inspection and logs always require an
 exact `{cluster, job_id}` pair. Submission never guesses a cluster and uses a
 five-minute, one-use preview token bound to the selected bank script, target,
 directives, working directory, job name, and SHA-256 digest. Cancellation
-revalidates the active job and expected name before affecting exactly that job
-or array task. Mutation tools carry mutation/destructive MCP annotations and
-depend on the client to request approval.
+performs fresh queue and controller owner/name/state checks immediately before
+`scancel`: it accepts an ordinary job or one controller-proven `MASTER_TASK`
+array task, and rejects array masters or ranges rather than risking array-wide
+scope.
+Mutation tools carry mutation/destructive MCP annotations and depend on the
+client to request approval.
 
 Resources are available at `slurm-log://clusters`, per-cluster job lists, and
 cluster-qualified job, details, and log URIs. Concrete resources support MCP
 subscribe/unsubscribe notifications that fire only when sampled data changes;
 clients without subscriptions can use cursor-based log reads. Returned log text
 is explicitly marked as untrusted data, stripped of terminal control sequences,
-and bounded to recent Slurm `StdOut` data. No tool accepts a filesystem path,
-shell command, script body, sbatch option, SSH credential, or another user's job.
+and bounded to recent Slurm `StdOut` data. `StdOut` is resolved only beneath the
+configured cluster working directory; a path outside that root is treated as
+unavailable. No tool accepts a filesystem path, shell command, script body,
+sbatch option, SSH credential, or another user's job.
 Mutation attempts are recorded without contents or credentials in a private,
 rotating `mcp-audit.jsonl` beside the state ledger.
 
@@ -165,7 +173,7 @@ Configuration is stored at `~/.config/slurm-log/config.json` by default:
 {
   "clusters": [
     {"name":"local-lab","transport":"local","user":"local-user","workingDirectory":"/home/user/project","accounting":false},
-    {"name":"remote-lab","transport":"ssh","user":"remote-user","sshHost":"cluster-alias","workingDirectory":"/home/user/project","accounting":true}
+    {"name":"remote-lab","controller":"production-a","transport":"ssh","user":"remote-user","sshHost":"cluster-alias","workingDirectory":"/home/user/project","accounting":true}
   ],
   "sbatchBanks": [
     {"path":"/home/user/project/cluster"},
@@ -183,6 +191,14 @@ selected, one bounded noninteractive SSH probe detects the remote SLURM cluster
 name, user, home directory, and `sacct` availability; these are shown and used
 as editable defaults. If connection or detection fails, setup continues with
 manual fields.
+
+`name` is the local display label. `controller` is the Slurm controller
+identity used to bind remote scheduler queries, submissions, and cancellations;
+it may differ from the label. Existing configurations without `controller`
+remain valid and use `name` as their controller identity. Remote submission
+requires `sbatch --parsable` to return that same controller identity, and a
+script whose `#SBATCH --clusters`/`-M` directive names another controller is
+rejected before preview or submission.
 
 Bank discovery proposes local per-user roots that actually exist, including
 the home directory, common storage/scratch/work mounts, and `SCRATCH`, `WORK`,
@@ -276,17 +292,19 @@ If the daemon is unavailable, clients transparently use the direct query path.
 
 ## Updating and uninstalling
 
-Update directly to the latest verified GitHub release:
+Update directly to the latest signed release:
 
 ```bash
 slurm-log update
 ```
 
-It verifies the published SHA-256 checksum, checks the new binary before making
-changes, atomically replaces the current executable, and preserves
-configuration and history. If the private daemon was running, it is restarted
-with the new binary. An already-downloaded or locally built binary can be
-installed without network access:
+The compiled updater embeds the reviewed `release-public-key.pem` trust anchor.
+It verifies the detached manifest signature before downloading the archive,
+checks the signed size and SHA-256 digest before extraction or candidate
+execution, atomically replaces the current executable, and preserves
+configuration and history. It rejects downgrades by default. If the private
+daemon was running, it is restarted with the new binary. An already-downloaded
+or locally built binary can be installed without network access:
 
 ```bash
 slurm-log update --binary ./slurm-log
@@ -310,14 +328,48 @@ From the source directory:
 ./package.sh
 ```
 
-This creates `dist/slurm-log-linux-ARCH.tar.gz` and its `.sha256` file. The
-archive contains portable source, installer scripts, documentation, an
-optimized native binary, and the example configuration. It excludes Cargo
-build trees, personal configuration, state, sockets, and job history.
+This creates `dist/slurm-log-linux-ARCH.tar.gz`, its `.sha256` file, and a
+strict unsigned `.manifest`. The archive contains portable source, installer
+scripts, documentation, an optimized native binary, and the example
+configuration. It excludes Cargo build trees, personal configuration, state,
+sockets, and job history. Packaging intentionally fails while
+`release-public-key.pem` is `UNCONFIGURED`.
 
 Pushing a `v*` tag runs the offline suite in GitHub Actions, builds a static
-x86-64 Linux binary, packages it, and publishes both the archive and checksum
-as a GitHub release.
+x86-64 Linux binary, and passes only the unsigned artifact set to a protected
+OpenSSL signing job. That job validates the tag, archive digest, size, and
+canonical manifest before producing a detached `.manifest.sig`. A separate
+`contents: write` publisher independently verifies that signature before
+creating the GitHub release.
+
+### Release-authentication bootstrap
+
+Before the first signed release, create a dedicated Ed25519 signing key in an
+approved key-management system. Never commit, print, or pass its private half
+to Cargo, build scripts, procedural macros, or repository executables. Export
+only the public half in canonical PEM form and replace `UNCONFIGURED` in
+`release-public-key.pem` in a reviewed source commit. The production binary
+compiles that PEM into its updater; it does not read a public key from a release
+server or runtime environment.
+
+Configure the protected `release-signing` environment with the unencrypted
+PKCS#8 PEM secret `SLURM_LOG_RELEASE_SIGNING_KEY_PEM`. Configure the protected
+`release-publishing` environment with the matching public PEM secret
+`SLURM_LOG_RELEASE_PUBLIC_KEY_PEM`, and require reviewers for both
+environments. The signing job copies the reviewed public PEM before its private
+secret is injected, compares the derived public key to it, uses OpenSSL only to
+sign, verifies the resulting signature, and removes temporary private-key
+material before upload. The publisher verifies again with its independently
+configured public PEM. Restrict tag creation and environment approval to the
+release maintainers.
+
+For a new installation, distribute the public PEM through a pinned reviewed
+commit, an authenticated organization channel, or an offline deployment
+bundle. Treat a PEM fetched from the same mutable release root as the archive
+as untrusted; it defeats the independent trust anchor. Hermetic tests generate
+an ephemeral key in a private temporary directory and use the explicitly
+compile-time `SLURM_LOG_TEST_BUILD=1` fixture path only; that route is absent
+from normal production binaries.
 
 ## Manual build
 
@@ -372,7 +424,9 @@ follower, daemon, and process-lifecycle adapters. Override the single gate with
 Run the online dependency security gate separately:
 
 ```bash
-cargo install cargo-audit cargo-deny cargo-geiger --locked
+cargo install --locked --version 0.22.2 cargo-audit
+cargo install --locked --version 0.20.2 cargo-deny
+cargo install --locked --version 0.13.0 cargo-geiger
 ./security-audit.sh
 ```
 

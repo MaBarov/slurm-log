@@ -20,11 +20,14 @@ cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$INTERACTIVE_CALL_LOG"
 case "$*" in
-    *'scontrol show job 9'*)
-        printf 'JobId=9 JobName=interactive-shell JobState=RUNNING BatchFlag=0 NodeList=gpu-01 Command=bash WorkDir=/tmp\n'
+    *'show job -o 9'*)
+        printf 'JobId=9 UserId=offline(1000) JobName=interactive-shell JobState=RUNNING BatchFlag=0 NodeList=gpu-01 Command=bash WorkDir=/tmp\n'
+        ;;
+    *'squeue -h'*' -j 9 '*)
+        printf '9|offline|RUNNING|interactive-shell|00:42|gpu-01|gpu|2026-08-12T10:00:00|1|bash\n'
         ;;
     *'squeue -h'*)
-        printf '9|RUNNING|interactive-shell|00:42|gpu-01|gpu|2026-08-12T10:00:00|1\n'
+        printf '9|RUNNING|interactive-shell|00:42|gpu-01|gpu|2026-08-12T10:00:00|1|offline\n'
         ;;
     *) exit 23 ;;
 esac
@@ -49,7 +52,7 @@ tmux respawn-pane -k -t "$pane" \
 attempt=0
 while :; do
     captured=$(tmux capture-pane -p -S -100 -t "$pane" 2>/dev/null || true)
-    case "$captured" in *'INTERACTIVE ALLOCATION'*'BatchFlag=0'*'allocation keeps running'*) break ;; esac
+    case "$captured" in *'WAITING FOR LOG'*'Slurm has not published this job'*'Press Enter to close this pane'*) break ;; esac
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 500 ]; then
         printf 'Interactive monitor did not render:\n%s\n' "$captured" >&2

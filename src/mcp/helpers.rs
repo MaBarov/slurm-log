@@ -1,17 +1,9 @@
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
 use anyhow::{Context, Result, bail};
 use rmcp::model::JsonObject;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::service::Preview;
 use crate::{bank, config::Config, slurm};
-
-static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(super) fn exact_job<'a>(config: &Config, args: &'a JsonObject) -> Result<(&'a str, &'a str)> {
     let cluster = required_string(args, "cluster")?;
@@ -95,7 +87,12 @@ pub(super) fn history_mode(value: &str) -> Result<slurm::HistoryMode> {
 }
 
 pub(super) fn dependencies(config: &Config, cluster: &str, id: &str) -> Result<Vec<String>> {
-    let value = slurm::scheduler_text(config, cluster, "scontrol", &["show", "job", "-o", id])?;
+    // Dependencies are returned by a second controller RPC, so repeat the
+    // exact-owner decision immediately before it rather than inheriting an
+    // inspect/list cache membership decision.
+    slurm::authorize_exact_job(config, cluster, id)?;
+    let value = slurm::control_job_text(config, cluster, id)?;
+    slurm::validate_control_identity(config, cluster, id, &value)?;
     let dependency = value
         .split_whitespace()
         .find_map(|field| field.strip_prefix("Dependency="))
@@ -134,25 +131,10 @@ pub(super) fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
-pub(super) fn preview_token(preview: &Preview) -> String {
-    let nonce = TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut digest = Sha256::new();
-    digest.update(b"slurm-log-preview-v1\0");
-    digest.update(preview.cluster.as_bytes());
-    digest.update(preview.script.as_bytes());
-    digest.update(preview.digest.as_bytes());
-    digest.update(std::process::id().to_le_bytes());
-    digest.update(now.to_le_bytes());
-    digest.update(nonce.to_le_bytes());
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+pub(super) fn preview_token() -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).context("obtain secure preview-token randomness")?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub(super) fn bounded_text(value: &str, maximum: usize) -> (String, bool) {
@@ -216,7 +198,7 @@ pub(super) fn sanitize(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, time::Instant};
+    use std::path::PathBuf;
 
     use rmcp::model::JsonObject;
     use serde_json::{Value, json};
@@ -238,6 +220,7 @@ mod tests {
             sbatch_banks: Vec::new(),
             clusters: vec![ClusterConfig {
                 name: "alpha".into(),
+                controller: None,
                 transport: "local".into(),
                 user: "offline".into(),
                 ssh_host: String::new(),
@@ -319,18 +302,9 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
 
-        let preview = Preview {
-            created: Instant::now(),
-            cluster: "alpha".into(),
-            script: "Bank/train.sbatch".into(),
-            digest: "a".repeat(64),
-            directives: Vec::new(),
-            working_directory: "/tmp".into(),
-            job_name: "train".into(),
-        };
-        let first = preview_token(&preview);
+        let first = preview_token().unwrap();
         assert_eq!(first.len(), 64);
-        assert_ne!(first, preview_token(&preview));
+        assert_ne!(first, preview_token().unwrap());
     }
 
     #[test]

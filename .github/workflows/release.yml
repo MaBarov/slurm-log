@@ -5,14 +5,15 @@ on:
     tags:
       - "v*"
 
+# Every job starts read-only. Only the final publisher can write a release.
 permissions:
   contents: read
 
 jobs:
-  linux-x86_64:
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -22,24 +23,192 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes tmux
 
+      - name: Install pinned dependency-security tools in a disposable directory
+        env:
+          CARGO_INSTALL_ROOT: ${{ runner.temp }}/slurm-log-audit-tools
+        run: |
+          cargo install --locked --version 0.22.2 cargo-audit
+          cargo install --locked --version 0.20.2 cargo-deny
+          cargo install --locked --version 0.13.0 cargo-geiger
+          printf '%s/bin\n' "$CARGO_INSTALL_ROOT" >> "$GITHUB_PATH"
+
       - name: Run the complete offline suite
         run: ./test-all.sh
+
+      - name: Install pinned source coverage tool
+        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+
+      - name: Enforce full-stack source coverage
+        run: ./coverage.sh
+
+      - name: Run the dependency-security gate
+        run: ./security-audit.sh
+
+  build:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Install the static Linux target
         run: |
           rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
           sudo apt-get install --yes musl-tools
 
-      - name: Build the portable release archive
+      - name: Build the unsigned portable release set
         env:
           SLURM_LOG_TARGET: x86_64-unknown-linux-musl
-        run: ./package.sh dist/slurm-log-linux-x86_64.tar.gz
+        run: |
+          env -u SLURM_LOG_PACKAGE_BINARY -u SLURM_LOG_ALLOW_PACKAGE_BINARY \
+            -u SLURM_LOG_TEST_BUILD -u SLURM_LOG_TEST_RELEASE_PUBLIC_KEY \
+            ./package.sh dist/slurm-log-linux-x86_64.tar.gz
 
-      - name: Publish the GitHub release
+      - name: Upload the unsigned release set
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        with:
+          name: release-unsigned
+          if-no-files-found: error
+          path: |
+            dist/slurm-log-linux-x86_64.tar.gz
+            dist/slurm-log-linux-x86_64.tar.gz.sha256
+            dist/slurm-log-linux-x86_64.tar.gz.manifest
+
+  sign:
+    needs: build
+    runs-on: ubuntu-24.04
+    # This protected environment contains an unencrypted PKCS#8 Ed25519 key.
+    # No source code is compiled or run after that secret is injected.
+    environment: release-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Check out only the reviewed public trust anchor
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Copy the public anchor before protected key material is available
+        run: |
+          set -euo pipefail
+          test -s release-public-key.pem
+          ! grep -qx 'UNCONFIGURED' release-public-key.pem
+          install -d -m 700 "$RUNNER_TEMP/slurm-log-release-signing"
+          install -m 600 release-public-key.pem "$RUNNER_TEMP/slurm-log-release-signing/release-public-key.pem"
+
+      - name: Download the unsigned release set
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: release-unsigned
+          path: ${{ runner.temp }}/slurm-log-release-signing/dist
+
+      - name: Verify tag and archive, then sign without repository code
+        env:
+          SLURM_LOG_RELEASE_SIGNING_KEY_PEM: ${{ secrets.SLURM_LOG_RELEASE_SIGNING_KEY_PEM }}
+        working-directory: ${{ runner.temp }}/slurm-log-release-signing
+        run: |
+          set -euo pipefail
+          umask 077
+          trusted_key=$RUNNER_TEMP/slurm-log-release-signing/release-public-key.pem
+          private_key=$RUNNER_TEMP/slurm-log-release-signing/release-private.pem
+          trusted_der=$RUNNER_TEMP/slurm-log-release-signing/release-public.der
+          derived_der=$RUNNER_TEMP/slurm-log-release-signing/derived-public.der
+          cleanup() { rm -f "$private_key" "$trusted_der" "$derived_der"; }
+          trap cleanup EXIT HUP INT TERM
+          printf '%s\n' "$SLURM_LOG_RELEASE_SIGNING_KEY_PEM" > "$private_key"
+          unset SLURM_LOG_RELEASE_SIGNING_KEY_PEM
+          test -s "$private_key"
+          openssl pkey -pubin -in "$trusted_key" -pubout -outform DER > "$trusted_der"
+          openssl pkey -in "$private_key" -pubout -outform DER > "$derived_der"
+          test "$(wc -c < "$trusted_der" | tr -d ' ')" = 44
+          cmp -s "$trusted_der" "$derived_der"
+          case "$GITHUB_REF_NAME" in v*) release_version=${GITHUB_REF_NAME#v} ;; *) exit 2 ;; esac
+          printf '%s\n' "$release_version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          asset=slurm-log-linux-x86_64.tar.gz
+          archive=dist/$asset
+          manifest=$archive.manifest
+          checksum=$archive.sha256
+          signature=$manifest.sig
+          digest=$(sha256sum "$archive" | awk '{ print $1 }')
+          size=$(wc -c < "$archive" | tr -d ' ')
+          printf 'slurm-log-release-v1\nversion=%s\ntarget=x86_64-unknown-linux-musl\narchive=%s\nsha256=%s\nsize=%s\n' \
+            "$release_version" "$asset" "$digest" "$size" > expected.manifest
+          printf '%s  %s\n' "$digest" "$asset" > expected.sha256
+          cmp -s expected.manifest "$manifest"
+          cmp -s expected.sha256 "$checksum"
+          rm -f "$signature"
+          openssl pkeyutl -sign -inkey "$private_key" -rawin -in "$manifest" -out "$signature"
+          test "$(wc -c < "$signature" | tr -d ' ')" = 64
+          openssl pkeyutl -verify -pubin -inkey "$trusted_key" -rawin \
+            -in "$manifest" -sigfile "$signature"
+          rm -f "$private_key" "$trusted_der" "$derived_der"
+          trap - EXIT HUP INT TERM
+
+      - name: Upload the signed verified release set
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        with:
+          name: release-signed
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz
+            ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.sha256
+            ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.manifest
+            ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.manifest.sig
+
+  publish:
+    needs: [verify, sign]
+    runs-on: ubuntu-24.04
+    # The independent public anchor is stored in this protected environment.
+    environment: release-publishing
+    permissions:
+      contents: write
+    steps:
+      - name: Download only the signed release set
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: release-signed
+          path: dist
+
+      - name: Verify the signed artifact set without compiling or testing code
+        env:
+          SLURM_LOG_RELEASE_PUBLIC_KEY_PEM: ${{ secrets.SLURM_LOG_RELEASE_PUBLIC_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          public_key=$RUNNER_TEMP/slurm-log-release-public.pem
+          cleanup() { rm -f "$public_key" expected.manifest expected.sha256; }
+          trap cleanup EXIT HUP INT TERM
+          printf '%s\n' "$SLURM_LOG_RELEASE_PUBLIC_KEY_PEM" > "$public_key"
+          unset SLURM_LOG_RELEASE_PUBLIC_KEY_PEM
+          test -s "$public_key"
+          asset=slurm-log-linux-x86_64.tar.gz
+          archive=dist/$asset
+          manifest=$archive.manifest
+          checksum=$archive.sha256
+          signature=$manifest.sig
+          test "$(wc -c < "$signature" | tr -d ' ')" = 64
+          case "$GITHUB_REF_NAME" in v*) release_version=${GITHUB_REF_NAME#v} ;; *) exit 2 ;; esac
+          printf '%s\n' "$release_version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          digest=$(sha256sum "$archive" | awk '{ print $1 }')
+          size=$(wc -c < "$archive" | tr -d ' ')
+          printf 'slurm-log-release-v1\nversion=%s\ntarget=x86_64-unknown-linux-musl\narchive=%s\nsha256=%s\nsize=%s\n' \
+            "$release_version" "$asset" "$digest" "$size" > expected.manifest
+          printf '%s  %s\n' "$digest" "$asset" > expected.sha256
+          cmp -s expected.manifest "$manifest"
+          cmp -s expected.sha256 "$checksum"
+          openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin \
+            -in "$manifest" -sigfile "$signature"
+          rm -f "$public_key" expected.manifest expected.sha256
+          trap - EXIT HUP INT TERM
+
+      - name: Publish the verified GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
           dist/slurm-log-linux-x86_64.tar.gz
           dist/slurm-log-linux-x86_64.tar.gz.sha256
+          dist/slurm-log-linux-x86_64.tar.gz.manifest
+          dist/slurm-log-linux-x86_64.tar.gz.manifest.sig
           --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

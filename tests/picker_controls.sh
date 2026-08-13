@@ -42,20 +42,33 @@ printf '#!/bin/sh\n#SBATCH --job-name=picker-bank\n' >"$test_root/bank/run.sbatc
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
 printf 'squeue %s\n' "$*" >>"$PICKER_CALL_LOG"
-printf '501|RUNNING|grouped|00:01|node|cpu|2026-08-12T10:00:00|501|one.sbatch\n'
-printf '500|RUNNING|grouped|00:02|node|cpu|2026-08-12T10:00:00|500|two.sbatch\n'
+case "$*" in
+    *'%i|%u|%T'*)
+        id=
+        previous=
+        for argument do
+            if test "$previous" = -j; then id=$argument; break; fi
+            previous=$argument
+        done
+        case "$id" in 500|501) name=grouped ;; *) name=job-$id ;; esac
+        printf '%s|offline|RUNNING|%s|00:03|node|cpu|2026-08-12T10:00:00|%s|job.sbatch\n' "$id" "$name" "$id"
+        exit 0
+        ;;
+esac
+printf '501|RUNNING|grouped|00:01|node|cpu|2026-08-12T10:00:00|501|one.sbatch|offline\n'
+printf '500|RUNNING|grouped|00:02|node|cpu|2026-08-12T10:00:00|500|two.sbatch|offline\n'
 id=499
 while test "$id" -ge 484; do
-    printf '%s|RUNNING|job-%s|00:03|node|cpu|2026-08-12T10:00:00|%s|job.sbatch\n' "$id" "$id" "$id"
+    printf '%s|RUNNING|job-%s|00:03|node|cpu|2026-08-12T10:00:00|%s|job.sbatch|offline\n' "$id" "$id" "$id"
     id=$((id - 1))
 done
-printf '600|PENDING|blocked-job|00:00|DependencyNeverSatisfied|cpu|Unknown|1|blocked.sbatch\n'
+printf '600|PENDING|blocked-job|00:00|DependencyNeverSatisfied|cpu|Unknown|1|blocked.sbatch|offline\n'
 EOF
 cat >"$fake_bin/sacct" <<'EOF'
 #!/bin/sh
 printf 'sacct %s\n' "$*" >>"$PICKER_CALL_LOG"
-printf '700|COMPLETED|alpha-complete|00:03|%s|0:0|1G|cpu=2,mem=2G|cpu\n' "$PICKER_NOW"
-printf '701|FAILED|alpha-failed|00:04|%s|1:0|2G|cpu=2,mem=2G|cpu\n' "$PICKER_NOW"
+printf '700|COMPLETED|alpha-complete|00:03|%s|0:0|1G|cpu=2,mem=2G|cpu|offline|alpha\n' "$PICKER_NOW"
+printf '701|FAILED|alpha-failed|00:04|%s|1:0|2G|cpu=2,mem=2G|cpu|offline|alpha\n' "$PICKER_NOW"
 EOF
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
@@ -65,19 +78,28 @@ EOF
 cat >"$fake_bin/scontrol" <<'EOF'
 #!/bin/sh
 printf 'scontrol %s\n' "$*" >>"$PICKER_CALL_LOG"
-if test "${3:-}" = -o; then
-    id=$4
-    printf 'JobId=%s JobName=job-%s JobState=RUNNING Reason=None RunTime=00:03:00 TimeLimit=01:00:00 NumNodes=1 NumCPUs=2 Partition=cpu NodeList=node Account=test QOS=normal ReqTRES=cpu=2,mem=2G AllocTRES=cpu=2,mem=2G ExitCode=0:0\n' "$id" "$id"
-else
-    id=$3
+id=
+for argument do id=$argument; done
+case " $* " in
+*' -o '*)
     case "$id" in 500|501) name=grouped ;; *) name=job-$id ;; esac
-    printf 'JobId=%s JobName=%s JobState=RUNNING StdOut=%s/job.log\n' "$id" "$name" "$PICKER_ROOT"
-fi
+    printf 'JobId=%s UserId=offline(1000) JobName=%s JobState=RUNNING Reason=None RunTime=00:03:00 TimeLimit=01:00:00 NumNodes=1 NumCPUs=2 Partition=cpu NodeList=node Account=test QOS=normal ReqTRES=cpu=2,mem=2G AllocTRES=cpu=2,mem=2G ExitCode=0:0 StdOut=%s/job.log\n' "$id" "$name" "$PICKER_ROOT"
+    ;;
+*)
+    case "$id" in 500|501) name=grouped ;; *) name=job-$id ;; esac
+    printf 'JobId=%s UserId=offline(1000) JobName=%s JobState=RUNNING StdOut=%s/job.log\n' "$id" "$name" "$PICKER_ROOT"
+    ;;
+esac
 EOF
 cat >"$fake_bin/sstat" <<'EOF'
 #!/bin/sh
 printf 'sstat %s\n' "$*" >>"$PICKER_CALL_LOG"
-id=$4
+id=
+previous=
+for argument do
+    if test "$previous" = -j; then id=$argument; break; fi
+    previous=$argument
+done
 printf '%s.batch|2|cpu=2,mem=2G|00:01:00|512M|256M||\n' "$id"
 EOF
 cat >"$fake_bin/scancel" <<'EOF'
@@ -222,7 +244,7 @@ tmux_test send-keys -t "$main_session" / job-498 Enter x
 wait_text "$main_session" 'STOP 1 ACTIVE JOB(S)?'
 tmux_test send-keys -t "$main_session" y
 wait_text "$main_session" 'Stop requested for 1 job(s)'
-grep -F 'scancel 498' "$calls" >/dev/null
+grep -F 'scancel --clusters alpha 498' "$calls" >/dev/null
 ! grep -F 'scancel 499' "$calls" >/dev/null
 wait_text "$main_session" '1 selected'
 tmux_test send-keys -t "$main_session" c Escape
@@ -303,7 +325,7 @@ tmux_test send-keys -t "$main_session" Escape
 # picker; `s` enters and exits the script bank without corrupting the screen.
 tmux_test send-keys -t "$main_session" / job-499 Enter i
 attempt=0
-until grep -F 'scontrol show job -o 499' "$calls" >/dev/null 2>&1; do
+until grep -F 'scontrol --cluster alpha show job -o 499' "$calls" >/dev/null 2>&1; do
     attempt=$((attempt + 1)); test "$attempt" -lt 500; sleep 0.01
 done
 wait_text "$main_session" 'alpha:499  job-499'

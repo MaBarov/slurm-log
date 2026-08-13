@@ -24,6 +24,7 @@ fn multi_cluster_config() -> Config {
             .into_iter()
             .map(|name| ClusterConfig {
                 name: name.into(),
+                controller: None,
                 transport: "local".into(),
                 user: "alice".into(),
                 ssh_host: String::new(),

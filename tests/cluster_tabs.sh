@@ -34,15 +34,27 @@ tmux new-session -d -s cluster-tabs-bootstrap sleep 120
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
 printf 'squeue %s\n' "$*" >>"$OFFLINE_CALL_LOG"
-printf '101|RUNNING|alpha-only-job|00:01|alpha-node|cpu|2026-08-12T10:00:00|1000\n'
+printf '101|RUNNING|alpha-only-job|00:01|alpha-node|cpu|2026-08-12T10:00:00|1000||offline\n'
+EOF
+
+cat >"$fake_bin/scontrol" <<'EOF'
+#!/bin/sh
+printf 'scontrol %s\n' "$*" >>"$OFFLINE_CALL_LOG"
+case "$*" in
+  *'show job -o 101'*) printf 'JobId=101 UserId=offline(1000) JobName=alpha-only-job JobState=RUNNING\n' ;;
+  *) exit 24 ;;
+esac
 EOF
 
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 printf 'ssh %s\n' "$*" >>"$OFFLINE_CALL_LOG"
 case "$*" in
+    *beta.invalid*'show job -o 202'*)
+        printf 'JobId=202 UserId=offline(1000) JobName=beta-only-job JobState=RUNNING\n'
+        ;;
     *beta.invalid*'squeue -h'*)
-        printf '202|RUNNING|beta-only-job|00:02|beta-node|gpu|2026-08-12T10:00:00|2000\n999|PENDING|blocked-open-job|00:00|DependencyNeverSatisfied|gpu|Unknown|100\n'
+        printf '202|RUNNING|beta-only-job|00:02|beta-node|gpu|2026-08-12T10:00:00|2000||offline\n999|PENDING|blocked-open-job|00:00|DependencyNeverSatisfied|gpu|Unknown|100||offline\n'
         ;;
     *beta.invalid*scancel*) : ;;
     *)
@@ -55,7 +67,7 @@ cat >"$fake_bin/scancel" <<'EOF'
 #!/bin/sh
 printf 'scancel %s\n' "$*" >>"$OFFLINE_CALL_LOG"
 EOF
-chmod 755 "$fake_bin/squeue" "$fake_bin/ssh" "$fake_bin/scancel"
+chmod 755 "$fake_bin/squeue" "$fake_bin/scontrol" "$fake_bin/ssh" "$fake_bin/scancel"
 
 cat >"$config" <<EOF
 {"clusters":[{"name":"alpha","transport":"local","user":"offline","sshHost":"","workingDirectory":"$test_root","accounting":false},{"name":"beta","transport":"ssh","user":"offline","sshHost":"beta.invalid","workingDirectory":"/offline","accounting":false}],"statePath":"$test_root/state/state.json"}
@@ -137,6 +149,8 @@ wait_for_screen_text() {
         attempt=$((attempt + 1))
         test "$attempt" -lt 150 || {
             printf 'Picker did not show %s:\n%s\n' "$wanted" "$screen" >&2
+            printf 'Fake scheduler calls:\n' >&2
+            test ! -f "$call_log" || cat "$call_log" >&2
             exit 1
         }
         sleep 0.01

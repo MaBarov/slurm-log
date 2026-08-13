@@ -16,6 +16,7 @@ fn server(state: PathBuf) -> McpServer {
         sbatch_banks: Vec::new(),
         clusters: vec![ClusterConfig {
             name: "alpha".into(),
+            controller: None,
             transport: "local".into(),
             user: "offline".into(),
             ssh_host: String::new(),
@@ -28,6 +29,7 @@ fn server(state: PathBuf) -> McpServer {
         config: std::sync::Arc::new(config),
         previews: std::sync::Arc::new(Mutex::new(HashMap::new())),
         subscriptions: std::sync::Arc::new(Mutex::new(HashMap::new())),
+        work: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
     }
 }
 

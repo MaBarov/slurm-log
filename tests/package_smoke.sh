@@ -4,10 +4,28 @@
 
 set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
 test_root=$(mktemp -d)
 case "$test_root" in /tmp/*) ;; *) printf 'Unsafe temp path\n' >&2; exit 1 ;; esac
 trap 'rm -rf "$test_root"' EXIT HUP INT TERM
+
+# A fresh ephemeral PKCS#8 key exists only beneath this test's private temp
+# directory. Cargo receives the public half only through the explicit fixture
+# build flag; production builds take their immutable verifier key from the
+# reviewed source PEM and never accept a runtime key override.
+real_cargo=$(command -v cargo)
+test_private_key=$test_root/release-private.pem
+test_public_pem=$test_root/release-public.pem
+umask 077
+openssl genpkey -algorithm ED25519 -out "$test_private_key" >/dev/null 2>&1
+openssl pkey -in "$test_private_key" -pubout -out "$test_public_pem" >/dev/null 2>&1
+test_public_key=$(openssl pkey -pubin -in "$test_public_pem" -pubout -outform DER | \
+    tail -c 32 | od -An -tx1 | tr -d ' \n')
+[ "${#test_public_key}" -eq 64 ]
+CARGO_NET_OFFLINE=true SLURM_LOG_TEST_BUILD=1 \
+SLURM_LOG_TEST_RELEASE_PUBLIC_KEY="$test_public_key" \
+    "$real_cargo" build --locked --offline --release --manifest-path "$project_dir/Cargo.toml" --bin slurm-log >/dev/null
+binary=${SLURM_LOG_TEST_BINARY:-$project_dir/target/release/slurm-log}
+test -s "$test_public_pem"
 
 fake_bin=$test_root/fake-bin
 home_dir=$test_root/home
@@ -27,17 +45,56 @@ export XDG_CONFIG_HOME=$home_dir/config
 export XDG_STATE_HOME=$home_dir/state
 export PATH=$fake_bin:/usr/local/bin:/usr/bin:/bin
 
+# A normal release must accept the reviewed production anchor. Then repeat the
+# same packaging operation from a source copy whose anchor was replaced by the
+# sentinel, proving that production packaging fails for an unconfigured key
+# even when Cargo and a seemingly valid binary are available.
+production_probe=$test_root/production-probe.tar.gz
+SLURM_LOG_ALLOW_PACKAGE_BINARY=1 \
+SLURM_LOG_PACKAGE_BINARY=$binary \
+    "$project_dir/package.sh" "$production_probe" >/dev/null
+test -s "$production_probe"
+
+unconfigured_project=$test_root/unconfigured-project
+mkdir -p "$unconfigured_project"
+for item in Cargo.toml Cargo.lock build.rs release-public-key.pem deny.toml README.md CHANGELOG.md LICENSE install.sh update.sh uninstall.sh package.sh test-all.sh security-audit.sh config.example.json src tests; do
+    cp -R "$project_dir/$item" "$unconfigured_project/"
+done
+printf '%s\n' UNCONFIGURED >"$unconfigured_project/release-public-key.pem"
+if SLURM_LOG_ALLOW_PACKAGE_BINARY=1 \
+   SLURM_LOG_PACKAGE_BINARY=$binary \
+   "$unconfigured_project/package.sh" "$test_root/untrusted.tar.gz" >/dev/null 2>&1; then
+    printf 'Production packaging accepted an unconfigured release key\n' >&2
+    exit 1
+fi
+
 # A release package carries a matching checksum and can be consumed by a
 # standalone copy of install.sh without Cargo or network access.
 release_fixture=$test_root/release
 release_archive=$release_fixture/slurm-log-linux-x86_64.tar.gz
 mkdir -p "$release_fixture"
+SLURM_LOG_TEST_BUILD=1 \
+SLURM_LOG_TEST_RELEASE_PUBLIC_KEY="$test_public_key" \
+SLURM_LOG_TARGET=x86_64-unknown-linux-musl \
+SLURM_LOG_ALLOW_PACKAGE_BINARY=1 \
 SLURM_LOG_PACKAGE_BINARY=$binary "$project_dir/package.sh" "$release_archive" >/dev/null
+openssl pkeyutl -sign -inkey "$test_private_key" -rawin \
+    -in "$release_archive.manifest" -out "$release_archive.manifest.sig"
 test -s "$release_archive"
 test -s "$release_archive.sha256"
+test -s "$release_archive.manifest"
+test "$(wc -c <"$release_archive.manifest.sig" | tr -d ' ')" = 64
 expected=$(awk 'NR == 1 { print $1 }' "$release_archive.sha256")
 test "$expected" = "$(sha256sum "$release_archive" | awk '{ print $1 }')"
 tar -tzf "$release_archive" | grep -Fx 'slurm-log/bin/slurm-log' >/dev/null
+
+copy_signed_fixture() {
+    destination=$1
+    mkdir -p "$destination"
+    for suffix in '' .sha256 .manifest .manifest.sig; do
+        cp "$release_archive$suffix" "$destination/$(basename "$release_archive")$suffix"
+    done
+}
 
 cat >"$fake_bin/curl" <<'EOF'
 #!/bin/sh
@@ -45,11 +102,20 @@ output=
 url=
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -o) output=$2; shift 2 ;;
+        -o|--output) output=$2; shift 2 ;;
+        --retry|--connect-timeout|--max-time|--max-filesize|--proto) shift 2 ;;
+        -fsSL) shift ;;
         *) url=$1; shift ;;
     esac
 done
-cp "$SLURM_LOG_RELEASE_FIXTURE/$(basename -- "$url")" "$output"
+if [ -n "${SLURM_LOG_CURL_LOG:-}" ]; then
+    printf '%s\n' "$(basename -- "$url")" >>"$SLURM_LOG_CURL_LOG"
+fi
+if [ "$output" = - ]; then
+    cat "$SLURM_LOG_RELEASE_FIXTURE/$(basename -- "$url")"
+else
+    cp "$SLURM_LOG_RELEASE_FIXTURE/$(basename -- "$url")" "$output"
+fi
 EOF
 chmod 755 "$fake_bin/curl"
 standalone=$test_root/standalone
@@ -64,7 +130,7 @@ SLURM_LOG_RELEASE_FIXTURE=$release_fixture \
 SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
 XDG_CONFIG_HOME=$home_dir/download-config \
 XDG_STATE_HOME=$home_dir/download-state \
-    "$standalone/install.sh" --prefix "$home_dir/download-prefix" \
+    "$standalone/install.sh" --release-public-key "$test_public_pem" --prefix "$home_dir/download-prefix" \
     --no-setup --no-path-update >/dev/null
 cmp "$home_dir/download-prefix/bin/slurm-log" "$binary"
 
@@ -75,7 +141,7 @@ if SLURM_LOG_RELEASE_FIXTURE=$release_fixture \
    SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
    XDG_CONFIG_HOME=$home_dir/forged-config \
    XDG_STATE_HOME=$home_dir/forged-state \
-   "$standalone/install.sh" --prefix "$home_dir/forged-prefix" \
+   "$standalone/install.sh" --release-public-key "$test_public_pem" --prefix "$home_dir/forged-prefix" \
    --no-setup --no-path-update >/dev/null 2>&1; then
     printf 'Installer accepted a forged release checksum\n' >&2
     exit 1
@@ -145,9 +211,8 @@ test "$(sha256sum "$config" | cut -d ' ' -f 1)" = "$config_before"
 # Identical updates are a no-op and do not cycle the daemon.
 "$installed" update --binary "$binary" | grep -F 'already up to date' >/dev/null
 
-# Downloader failures and fallbacks fail closed without changing the installed
-# image. These fixtures exercise both supported clients and checksum/archive
-# rejection without contacting a network.
+# Downloader and signed-artifact failures fail closed without changing the
+# image. These fixtures use only local fake curl and release files.
 curl_fail_bin=$test_root/curl-fail-bin
 mkdir -p "$curl_fail_bin"
 printf '#!/bin/sh\nexit 7\n' >"$curl_fail_bin/curl"
@@ -164,42 +229,46 @@ if env PATH="$curl_error_bin" "$installed" update >/dev/null 2>&1; then
     exit 1
 fi
 
-wget_fail_bin=$test_root/wget-fail-bin
-mkdir -p "$wget_fail_bin"
-printf '#!/bin/sh\nexit 8\n' >"$wget_fail_bin/wget"
-chmod 755 "$wget_fail_bin/wget"
-if env PATH="$wget_fail_bin" "$installed" update >/dev/null 2>&1; then
-    printf 'Failed wget update was accepted\n' >&2
+# Both a forged manifest and a forged detached signature fail before archive
+# extraction or candidate execution.
+forged_manifest_fixture=$test_root/forged-manifest-release
+copy_signed_fixture "$forged_manifest_fixture"
+printf 'forged\n' >>"$forged_manifest_fixture/$(basename "$release_archive").manifest"
+forged_manifest_curl_log=$test_root/forged-manifest-curl.log
+if SLURM_LOG_RELEASE_FIXTURE="$forged_manifest_fixture" \
+   SLURM_LOG_CURL_LOG="$forged_manifest_curl_log" \
+   SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
+   "$installed" update >/dev/null 2>&1; then
+    printf 'Forged signed manifest was accepted\n' >&2
+    exit 1
+fi
+! grep -Fx "$(basename "$release_archive")" "$forged_manifest_curl_log" >/dev/null
+
+forged_signature_fixture=$test_root/forged-signature-release
+copy_signed_fixture "$forged_signature_fixture"
+printf x >"$forged_signature_fixture/$(basename "$release_archive").manifest.sig"
+if SLURM_LOG_RELEASE_FIXTURE="$forged_signature_fixture" \
+   SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
+   "$installed" update >/dev/null 2>&1; then
+    printf 'Forged manifest signature was accepted\n' >&2
     exit 1
 fi
 
-wget_bin=$test_root/wget-bin
-mkdir -p "$wget_bin"
-cat >"$wget_bin/wget" <<'EOF'
-#!/bin/sh
-output=
-url=
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -O) output=$2; shift 2 ;;
-        *) url=$1; shift ;;
-    esac
-done
-/bin/cp "$SLURM_LOG_RELEASE_FIXTURE/$(/usr/bin/basename "$url")" "$output"
-EOF
-chmod 755 "$wget_bin/wget"
-ln -s /usr/bin/sha256sum "$wget_bin/sha256sum"
-ln -s /usr/bin/tar "$wget_bin/tar"
-ln -s /usr/bin/gzip "$wget_bin/gzip"
-env PATH="$wget_bin" SLURM_LOG_RELEASE_FIXTURE="$release_fixture" \
-    SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
-    "$installed" update >/dev/null
-
+# A manifest and checksum that are valid for a non-tar payload still fail at
+# bounded extraction; this proves signature verification alone is not treated
+# as permission to execute/install arbitrary bytes.
 bad_tar_fixture=$test_root/bad-tar-release
 mkdir -p "$bad_tar_fixture"
-printf 'not a tar archive\n' >"$bad_tar_fixture/$(basename "$release_archive")"
-(cd "$bad_tar_fixture" && sha256sum "$(basename "$release_archive")" \
-    >"$(basename "$release_archive").sha256")
+bad_asset=$(basename "$release_archive")
+printf 'not a tar archive\n' >"$bad_tar_fixture/$bad_asset"
+bad_digest=$(sha256sum "$bad_tar_fixture/$bad_asset" | awk '{ print $1 }')
+bad_size=$(wc -c <"$bad_tar_fixture/$bad_asset" | tr -d ' ')
+printf 'slurm-log-release-v1\nversion=0.2.3\ntarget=x86_64-unknown-linux-musl\narchive=%s\nsha256=%s\nsize=%s\n' \
+    "$bad_asset" "$bad_digest" "$bad_size" >"$bad_tar_fixture/$bad_asset.manifest"
+printf '%s  %s\n' "$bad_digest" "$bad_asset" >"$bad_tar_fixture/$bad_asset.sha256"
+openssl pkeyutl -sign -inkey "$test_private_key" -rawin \
+    -in "$bad_tar_fixture/$bad_asset.manifest" \
+    -out "$bad_tar_fixture/$bad_asset.manifest.sig"
 if SLURM_LOG_RELEASE_FIXTURE="$bad_tar_fixture" \
    SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
    "$installed" update >/dev/null 2>&1; then
@@ -208,8 +277,7 @@ if SLURM_LOG_RELEASE_FIXTURE="$bad_tar_fixture" \
 fi
 
 large_checksum_fixture=$test_root/large-checksum-release
-mkdir -p "$large_checksum_fixture"
-cp "$release_archive" "$large_checksum_fixture/$(basename "$release_archive")"
+copy_signed_fixture "$large_checksum_fixture"
 head -c 5000 /dev/zero >"$large_checksum_fixture/$(basename "$release_archive").sha256"
 if SLURM_LOG_RELEASE_FIXTURE="$large_checksum_fixture" \
    SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
@@ -219,8 +287,7 @@ if SLURM_LOG_RELEASE_FIXTURE="$large_checksum_fixture" \
 fi
 
 mismatch_fixture=$test_root/mismatch-release
-mkdir -p "$mismatch_fixture"
-cp "$release_archive" "$mismatch_fixture/$(basename "$release_archive")"
+copy_signed_fixture "$mismatch_fixture"
 printf '%064d  %s\n' 0 "$(basename "$release_archive")" \
     >"$mismatch_fixture/$(basename "$release_archive").sha256"
 if SLURM_LOG_RELEASE_FIXTURE="$mismatch_fixture" \
@@ -230,17 +297,6 @@ if SLURM_LOG_RELEASE_FIXTURE="$mismatch_fixture" \
     exit 1
 fi
 
-bad_sha_bin=$test_root/bad-sha-bin
-mkdir -p "$bad_sha_bin"
-printf '#!/bin/sh\nexit 9\n' >"$bad_sha_bin/sha256sum"
-chmod 755 "$bad_sha_bin/sha256sum"
-if env PATH="$bad_sha_bin:$fake_bin:/usr/local/bin:/usr/bin:/bin" \
-   SLURM_LOG_RELEASE_FIXTURE="$release_fixture" \
-   SLURM_LOG_RELEASE_ROOT=https://offline.invalid/releases \
-   "$installed" update >/dev/null 2>&1; then
-    printf 'Update without a usable checksum tool was accepted\n' >&2
-    exit 1
-fi
 cmp "$installed" "$binary"
 
 # Explicit local binaries use the same atomic path without any download.
@@ -288,6 +344,16 @@ if "$installed" update --binary "$bad_release" >/dev/null 2>&1; then
 fi
 cmp "$installed" "$release_binary"
 
+# Candidate validation inspects the original path before canonicalization, so a
+# symlink cannot turn an explicit or archive candidate into another executable.
+linked_release=$test_root/linked-release
+ln -s "$binary" "$linked_release"
+if "$installed" update --binary "$linked_release" >/dev/null 2>&1; then
+    printf 'Symlinked update candidate was accepted\n' >&2
+    exit 1
+fi
+cmp "$installed" "$release_binary"
+
 # A valid-looking older binary is rejected before the installed image changes.
 old_release=$test_root/older-slurm-log
 cat >"$old_release" <<'EOF'
@@ -304,6 +370,13 @@ if "$installed" update --binary "$old_release" >/dev/null 2>&1; then
     exit 1
 fi
 cmp "$installed" "$release_binary"
+
+# The recovery updater has the same monotonic-version default as `slurm-log
+# update`; its override is explicit and is not exercised by this test.
+if "$project_dir/update.sh" --prefix "$home_dir/prefix" --binary "$old_release" >/dev/null 2>&1; then
+    printf 'Standalone updater accepted a downgrade\n' >&2
+    exit 1
+fi
 
 # Reinstall preserves existing configuration unless explicitly forced.
 "$project_dir/install.sh" \

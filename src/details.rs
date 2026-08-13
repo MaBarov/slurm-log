@@ -73,23 +73,23 @@ pub fn fetch(
     if !valid_job_id(id) {
         bail!("invalid job ID {id}");
     }
-    if let Ok(queue) = crate::slurm::queued(config, cluster)
-        && let Some(job) = queue.into_iter().find(|job| job.id == id)
-    {
-        if job.pending() {
-            return Ok(from_pending(job));
+    // Details are an MCP-visible read path.  Do not borrow the 15-second
+    // rendering cache here: a freshly returned owner-scoped job is the
+    // authorization object bound to the subsequent scontrol/sstat request.
+    let job = crate::slurm::authorize_exact_job(config, cluster, id)?;
+    if job.pending() {
+        return Ok(from_pending(job));
+    }
+    if job.running() {
+        if let Some(previous) = previous {
+            return sample_running(config, cluster, id, job, previous);
         }
-        if job.running() {
-            if let Some(previous) = previous {
-                return sample_running(config, cluster, id, job, previous);
-            }
-            // Active jobs must not depend on sacct: accounting commonly lags
-            // behind squeue, especially for array tasks. Build the first frame
-            // from live scheduler data and enrich it with sstat when available.
-            let base =
-                live_details(config, job.clone()).unwrap_or_else(|_| from_live_queue(job.clone()));
-            return sample_running(config, cluster, id, job, &base).or(Ok(base));
-        }
+        // Active jobs must not depend on sacct: accounting commonly lags
+        // behind squeue, especially for array tasks. Build the first frame
+        // from live scheduler data and enrich it with sstat when available.
+        let base =
+            live_details(config, job.clone()).unwrap_or_else(|_| from_live_queue(job.clone()));
+        return sample_running(config, cluster, id, job, &base).or(Ok(base));
     }
     if !config.cluster(cluster)?.accounting {
         bail!("accounting is unavailable on {cluster}, and job {id} is no longer active");
@@ -97,15 +97,48 @@ pub fn fetch(
     // JobIDRaw drops the array-task suffix (for example 3209343_2 becomes
     // 3209343), so it cannot identify the selected task. A wide JobID field
     // preserves both array suffixes and step suffixes without truncation.
-    let fields = "JobID%100,JobName,State,Reason,Partition,Account,QOS,Submit,Start,End,Elapsed,ElapsedRaw,Timelimit,NNodes,NCPUS,AllocCPUS,ReqCPUS,ReqMem,MaxRSS,AveRSS,AllocTRES,ReqTRES,TotalCPU,CPUTimeRAW,ExitCode,NodeList,TRESUsageInAve,TRESUsageInMax";
+    let fields = "JobID%100,JobName,State,Reason,Partition,Account,QOS,Submit,Start,End,Elapsed,ElapsedRaw,Timelimit,NNodes,NCPUS,AllocCPUS,ReqCPUS,ReqMem,MaxRSS,AveRSS,AllocTRES,ReqTRES,TotalCPU,CPUTimeRAW,ExitCode,NodeList,TRESUsageInAve,TRESUsageInMax,User,Cluster";
+    let target = config.cluster(cluster)?;
+    let cluster_option = crate::slurm::accounting_cluster_option(config, cluster)?;
     let command = format!(
-        "sacct -j {} -n -P --format={} 2>/dev/null",
+        "sacct{cluster_option} -j {} -u {} -n -P --format={} 2>/dev/null",
         shell_quote(id),
+        shell_quote(&target.user),
         shell_quote(fields)
     );
     let output = crate::slurm::scheduler_text(config, cluster, "sh", &["-c", &command])?;
+    let output = owned_accounting_rows(&output, target, id)?;
     parse_accounting(&output, cluster, id)
         .ok_or_else(|| anyhow::anyhow!("no accounting details found for {cluster}:{id}"))
+}
+
+/// Return only rows which remain bound to the exact requested job and owner.
+/// The User and Cluster fields are deliberately appended to the existing
+/// parser schema so numeric accounting columns keep their historical indexes.
+fn owned_accounting_rows(
+    output: &str,
+    target: &crate::config::ClusterConfig,
+    wanted: &str,
+) -> Result<String> {
+    let mut rows = Vec::new();
+    for line in output.lines() {
+        let fields: Vec<_> = line.split('|').map(str::trim).collect();
+        if fields.len() < 30 {
+            continue;
+        }
+        let base = fields[0].split('.').next().unwrap_or(fields[0]);
+        if base != wanted || fields[fields.len() - 2] != target.user {
+            continue;
+        }
+        if target.binds_controller() && fields[fields.len() - 1] != target.controller() {
+            continue;
+        }
+        rows.push(line);
+    }
+    if rows.is_empty() {
+        bail!("accounting metadata does not match the configured job owner");
+    }
+    Ok(rows.join("\n"))
 }
 
 include!("details/live.rs");

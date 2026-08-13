@@ -11,6 +11,7 @@ fn config(banks: Vec<SbatchBankConfig>) -> Config {
         sbatch_banks: banks,
         clusters: vec![ClusterConfig {
             name: "local".into(),
+            controller: None,
             transport: "local".into(),
             user: "offline".into(),
             ssh_host: String::new(),
@@ -142,6 +143,37 @@ fn catalog_helpers_cover_empty_names_origins_directives_and_cluster_support() {
 }
 
 #[test]
+fn routing_directives_require_one_matching_controller() {
+    let mut configured = config(Vec::new());
+    configured.clusters[0].controller = Some("controller-a".into());
+    let target = &configured.clusters[0];
+    let script = |directive: &str| Script {
+        bank: "bank".into(),
+        relative: PathBuf::from("run.sbatch"),
+        name: "run".into(),
+        directives: vec![directive.into()],
+        origin: None,
+        bytes: Vec::new(),
+    };
+
+    for directive in [
+        "--clusters=controller-a",
+        "--cluster controller-a",
+        "-Mcontroller-a",
+        "-M=controller-a",
+    ] {
+        validate_script_controller(&script(directive), target).unwrap();
+    }
+    for directive in [
+        "--clusters",
+        "--cluster controller-a controller-b",
+        "-Mcontroller-b",
+    ] {
+        assert!(validate_script_controller(&script(directive), target).is_err());
+    }
+}
+
+#[test]
 fn scan_worker_validates_arguments_and_serializes_failures() {
     assert!(run_scan_worker(&[]).is_err());
     assert!(run_scan_worker(&["output".into()]).is_err());
@@ -154,7 +186,7 @@ fn scan_worker_validates_arguments_and_serializes_failures() {
     ])
     .unwrap();
     let payload: ScanPayload = rmp_serde::from_slice(&fs::read(output).unwrap()).unwrap();
-    assert!(payload.error.unwrap().contains("open bank"));
+    assert!(payload.error.unwrap().contains("configured sbatch bank"));
 }
 
 #[test]
@@ -241,5 +273,29 @@ fn scan_skips_symlinks_and_canceling_no_active_jobs_is_a_noop() {
     assert_eq!(
         directive_job_name(&["-J spaced".into()]).as_deref(),
         Some("spaced")
+    );
+}
+
+#[test]
+fn configured_bank_scan_rejects_hard_linked_scripts() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("bank");
+    let outside = directory.path().join("outside.sbatch");
+    fs::create_dir(&root).unwrap();
+    fs::write(&outside, b"#!/bin/sh\n#SBATCH --job-name=foreign\n").unwrap();
+    fs::hard_link(&outside, root.join("linked.sbatch")).unwrap();
+    fs::write(
+        root.join("safe.sbatch"),
+        b"#!/bin/sh\n#SBATCH --job-name=safe\n",
+    )
+    .unwrap();
+
+    let (scripts, warnings) = scan_direct(&root).unwrap();
+    assert_eq!(scripts.len(), 1);
+    assert_eq!(scripts[0].relative, PathBuf::from("safe.sbatch"));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("changed while scanning"))
     );
 }

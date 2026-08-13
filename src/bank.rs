@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, OpenOptions},
     hash::{DefaultHasher, Hash, Hasher},
-    io::{self, BufReader, BufWriter, IsTerminal, Write},
+    io::{self, BufReader, BufWriter, IsTerminal, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -21,10 +21,12 @@ use crossterm::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    command::{shell_quote, ssh, text, text_with_input},
-    config::{Config, SbatchBankConfig},
+    command::{remote_scheduler_command, ssh_with_input, text, text_with_input},
+    config::{ClusterConfig, Config, SbatchBankConfig},
     model::{Job, valid_job_id},
 };
+
+mod scan_limits;
 
 const MAX_SCRIPTS: usize = 20_000;
 const MAX_DEPTH: usize = 3;
@@ -72,34 +74,37 @@ fn scan(root: &Path) -> Result<(Vec<Script>, Vec<String>)> {
 }
 
 fn scan_direct(root: &Path) -> Result<(Vec<Script>, Vec<String>)> {
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("open bank {}", root.display()))?;
-    if !root.is_dir() {
-        bail!("sbatch bank is not a directory: {}", root.display());
-    }
-    let mut stack = vec![(root.clone(), 0_usize)];
+    let root = crate::secure_open::SecureDir::open_root(root)
+        .context("securely open configured sbatch bank")?;
+    let mut stack = vec![(PathBuf::new(), root, 0_usize)];
     let mut scripts = Vec::new();
     let mut warnings = Vec::new();
-    while let Some((directory, depth)) = stack.pop() {
-        let mut entries: Vec<_> = fs::read_dir(&directory)?.filter_map(Result::ok).collect();
+    let mut payload_budget = scan_limits::PayloadBudget::new(MAX_BANK_CACHE_BYTES);
+    while let Some((relative, directory, depth)) = stack.pop() {
+        let mut entries: Vec<_> = fs::read_dir(directory.proc_path())?
+            .filter_map(Result::ok)
+            .collect();
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries.into_iter().rev() {
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
+            let name = entry.file_name();
+            let child = relative.join(&name);
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
                 continue;
             }
-            if metadata.is_dir() {
+            if file_type.is_dir() {
                 // The depth bound is an intentional scan policy, not an error.
                 // Do not descend merely to emit hundreds of identical notices.
-                if depth < MAX_DEPTH && !ignored_directory(&entry.file_name().to_string_lossy()) {
-                    stack.push((path, depth + 1));
+                if depth < MAX_DEPTH
+                    && !ignored_directory(&name.to_string_lossy())
+                    && let Ok(next) = directory.open_directory(Path::new(&name))
+                {
+                    stack.push((child, next, depth + 1));
                 }
                 continue;
             }
-            if !metadata.is_file()
-                || path.extension().and_then(|value| value.to_str()) != Some("sbatch")
+            if !file_type.is_file()
+                || child.extension().and_then(|value| value.to_str()) != Some("sbatch")
             {
                 continue;
             }
@@ -108,31 +113,55 @@ fn scan_direct(root: &Path) -> Result<(Vec<Script>, Vec<String>)> {
                 stack.clear();
                 break;
             }
-            if metadata.len() > MAX_SCRIPT_BYTES {
-                warnings.push(format!("ignored oversized script: {}", path.display()));
+            let file = match directory.open_file(Path::new(&name)) {
+                Ok(file) => file,
+                Err(_) => {
+                    warnings.push("ignored script changed while scanning".into());
+                    continue;
+                }
+            };
+            let opened = file.metadata()?;
+            if opened.len() > MAX_SCRIPT_BYTES {
+                warnings.push("ignored oversized script".into());
                 continue;
             }
-            let canonical = path.canonicalize()?;
-            if !canonical.starts_with(&root) {
+            if !opened.is_file() || opened.nlink() != 1 {
+                warnings.push("ignored script changed while scanning".into());
                 continue;
             }
-            let bytes = fs::read(&canonical)?;
+            let mut bytes = Vec::with_capacity(opened.len() as usize);
+            file.take(MAX_SCRIPT_BYTES.saturating_add(1))
+                .read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > MAX_SCRIPT_BYTES {
+                warnings.push("ignored oversized script".into());
+                continue;
+            }
+            if !payload_budget.accept(bytes.len() as u64) {
+                warnings.push("bank limited to 64 MiB of script data".into());
+                stack.clear();
+                break;
+            }
             let text = String::from_utf8_lossy(&bytes);
-            let directives: Vec<_> = text
-                .lines()
-                .filter_map(|line| line.trim_start().strip_prefix("#SBATCH"))
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect();
-            let fallback = canonical
+            let directives = sbatch_directives(&text);
+            let fallback = child
                 .file_stem()
                 .and_then(|value| value.to_str())
                 .unwrap_or("job");
             let name = directive_job_name(&directives).unwrap_or_else(|| fallback.into());
+            if has_terminal_control(&name)
+                || directives
+                    .iter()
+                    .any(|directive| has_terminal_control(directive))
+                || child
+                    .components()
+                    .any(|component| has_terminal_control(&component.as_os_str().to_string_lossy()))
+            {
+                warnings.push("ignored script with terminal control characters".into());
+                continue;
+            }
             scripts.push(Script {
                 bank: String::new(),
-                relative: canonical.strip_prefix(&root)?.to_path_buf(),
+                relative: child,
                 name,
                 directives,
                 origin: None,
@@ -142,6 +171,34 @@ fn scan_direct(root: &Path) -> Result<(Vec<Script>, Vec<String>)> {
     }
     scripts.sort_by(|left, right| left.relative.cmp(&right.relative));
     Ok((scripts, warnings))
+}
+
+fn sbatch_directives(text: &str) -> Vec<String> {
+    let mut directives = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_start();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(directive) = line.strip_prefix("#SBATCH") {
+            let directive = directive.trim();
+            if !directive.is_empty() {
+                directives.push(directive.to_string());
+            }
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        break;
+    }
+    directives
+}
+
+fn has_terminal_control(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_control() || character == '\x1b')
 }
 
 #[derive(Deserialize, Serialize)]

@@ -21,9 +21,23 @@ fn resolve_log_request(
     if !crate::model::valid_job_id(id) {
         bail!("invalid job ID {id}");
     }
+    // Cached log bytes are still a protected read.  Authorize before looking
+    // in the daemon cache so a 5/30-second entry cannot bridge an ID/owner
+    // transition.
+    let authorized = crate::slurm::authorize_exact_job(config, cluster, id)?;
     let key = format!("{cluster}\0{id}");
     if let Some(data) = cached_log(cache, &key, &request) {
-        return Ok(data);
+        // Cache hits still need the independently fetched controller metadata
+        // bound to the fresh authorization above. This prevents a reused job
+        // ID from inheriting bytes cached for an earlier job, even when both
+        // records belong to the configured Unix user.
+        let (_, metadata_name) =
+            crate::slurm::terminal_path_authorized(config, cluster, id, &authorized)?;
+        let authorized_name_matches =
+            authorized.name.is_empty() || authorized.name == data.job_name;
+        if authorized_name_matches && metadata_name == data.job_name {
+            return Ok(data);
+        }
     }
     let data = match request {
         LogRead::Metadata => crate::log_service::metadata(config, cluster, id)?,

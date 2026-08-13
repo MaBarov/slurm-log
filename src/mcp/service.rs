@@ -137,13 +137,14 @@ impl McpServer {
 
     pub(crate) fn inspect_job(&self, args: &JsonObject) -> Result<Value> {
         let (cluster, id) = exact_job(&self.config, args)?;
+        let authorized = slurm::authorize_exact_job(&self.config, cluster, id)?;
         let archive = self.config.cluster(cluster)?.accounting;
-        let (jobs, _, warnings) = slurm::all_jobs(&self.config, cluster, "all", archive)?;
-        let job = jobs.into_iter().find(|job| job.id == id);
+        let (_, _, warnings) = slurm::all_jobs(&self.config, cluster, "all", archive)?;
+        // Rendering caches may lag.  The exact fresh authorization object is
+        // the only job metadata allowed to accompany protected follow-up
+        // reads in an inspect response.
+        let job = authorized;
         let details = crate::daemon::job_details(&self.config, cluster, id, false).ok();
-        if job.is_none() && details.is_none() {
-            bail!("job {cluster}:{id} was not found");
-        }
         let log = crate::daemon::log_metadata(&self.config, cluster, id)?;
         let dependencies = dependencies(&self.config, cluster, id).unwrap_or_default();
         Ok(json!({
@@ -237,6 +238,7 @@ impl McpServer {
             let config = self.current_bank_config()?;
             let (scripts, warnings) = bank::configured_scripts_fresh(&config)?;
             let script = exact_script(&scripts, wanted, cluster)?;
+            bank::validate_script_controller(script, config.cluster(cluster)?)?;
             let digest = sha256(&script.bytes);
             let preview = Preview {
                 created: Instant::now(),
@@ -252,7 +254,7 @@ impl McpServer {
                     .to_string(),
                 job_name: script.name.clone(),
             };
-            let token = preview_token(&preview);
+            let token = preview_token()?;
             let mut previews = self
                 .previews
                 .lock()
@@ -310,6 +312,7 @@ impl McpServer {
             let config = self.current_bank_config()?;
             let (scripts, _) = bank::configured_scripts_fresh(&config)?;
             let script = exact_script(&scripts, &preview.script, &preview.cluster)?;
+            bank::validate_script_controller(script, config.cluster(&preview.cluster)?)?;
             let digest = sha256(&script.bytes);
             let working_directory = self
                 .config
@@ -324,7 +327,7 @@ impl McpServer {
             {
                 bail!("preview is stale because the script or target configuration changed");
             }
-            let job = bank::submit(&self.config, script, &preview.cluster)?;
+            let job = bank::submit(&config, script, &preview.cluster)?;
             Ok(
                 json!({"ok":true,"cluster":job.cluster,"job_id":job.id,"job_name":job.name,"script_sha256":digest}),
             )
@@ -363,20 +366,14 @@ impl McpServer {
             "attempted",
         )?;
         let result = (|| {
-            let job = slurm::queued(&self.config, cluster)?
-                .into_iter()
-                .find(|job| job.id == id)
-                .context("job is not active")?;
-            if !job.active() {
-                bail!("job is no longer active");
-            }
+            let job = slurm::fresh_cancellable_job(&self.config, cluster, id)?;
             if job.name != expected {
                 bail!(
                     "job name changed: expected {expected:?}, found {:?}",
                     job.name
                 );
             }
-            let failures = bank::cancel(&self.config, std::slice::from_ref(&job))?;
+            let failures = bank::cancel_verified(&self.config, std::slice::from_ref(&job))?;
             if !failures.is_empty() {
                 bail!("{}", failures.join("; "));
             }

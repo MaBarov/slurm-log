@@ -33,8 +33,11 @@ mkdir -p "$fake_bin" "$test_root/state"
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 case "$*" in
-    *'JobIDRaw,JobID,JobName,StdOut'*)
-        printf '1|1|offline|/tmp/offline-slurm-log\n'
+    *'--format=JobID,User,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition,Cluster'*)
+        printf '1|offline|FAILED|offline|00:01|2026-08-11T00:00:00+02:00|1:0|1M|cpu=1|test|cispa\n'
+        ;;
+    *'JobIDRaw,JobID,User,JobName,StdOut,Cluster'*)
+        printf '1|1|offline|offline|/tmp/offline-slurm-log|cispa\n'
         ;;
     *'JobID,State,JobName,Elapsed,End,ExitCode'*)
         printf '1|FAILED|offline|00:01|2026-08-11T00:00:00+02:00|1:0|1M|cpu=1|test\n'

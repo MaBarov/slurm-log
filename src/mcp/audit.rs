@@ -129,6 +129,7 @@ mod tests {
             sbatch_banks: Vec::new(),
             clusters: vec![ClusterConfig {
                 name: "alpha".into(),
+                controller: None,
                 transport: "local".into(),
                 user: "offline".into(),
                 ssh_host: String::new(),

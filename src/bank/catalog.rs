@@ -189,49 +189,111 @@ pub fn configured_scripts_fresh(config: &Config) -> Result<(Vec<Script>, Vec<Str
 fn directive_job_name(directives: &[String]) -> Option<String> {
     directives.iter().find_map(|line| {
         line.strip_prefix("--job-name=")
+            .or_else(|| line.strip_prefix("--job-name "))
             .or_else(|| line.strip_prefix("-J="))
             .map(str::to_string)
             .or_else(|| line.strip_prefix("-J ").map(str::to_string))
     })
 }
 
+/// Reject an sbatch directive that would send a previewed script to a
+/// controller other than the selected target.  Both long and short Slurm
+/// spellings are accepted only when their sole value equals the configured
+/// controller identity.
+pub fn validate_script_controller(script: &Script, target: &ClusterConfig) -> Result<()> {
+    for directive in &script.directives {
+        let Some(value) = routing_directive_value(directive)? else {
+            continue;
+        };
+        if value != target.controller() {
+            bail!(
+                "script routing directive selects controller {value:?}, not configured controller {:?}",
+                target.controller()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn routing_directive_value(directive: &str) -> Result<Option<&str>> {
+    for option in ["--clusters", "--cluster"] {
+        if let Some(value) = directive.strip_prefix(&format!("{option}=")) {
+            return routing_controller(value).map(Some);
+        }
+        if directive == option {
+            return routing_controller("").map(Some);
+        }
+        if let Some(value) = directive
+            .strip_prefix(option)
+            .and_then(|value| value.strip_prefix(char::is_whitespace))
+        {
+            return routing_controller(value).map(Some);
+        }
+    }
+    let Some(value) = directive.strip_prefix("-M") else {
+        return Ok(None);
+    };
+    // Slurm accepts `-Mcontroller` as well as `-M controller` and
+    // `-M=controller`; the attached spelling must not evade target checking.
+    let value = value
+        .strip_prefix('=')
+        .or_else(|| value.strip_prefix(char::is_whitespace))
+        .unwrap_or(value);
+    routing_controller(value).map(Some)
+}
+
+fn routing_controller(value: &str) -> Result<&str> {
+    let mut values = value.split_whitespace();
+    let controller = values
+        .next()
+        .filter(|value| !value.is_empty())
+        .context("sbatch routing directive requires one controller name")?;
+    if values.next().is_some() {
+        bail!("sbatch routing directive must contain exactly one controller name");
+    }
+    Ok(controller)
+}
+
 pub fn submit(config: &Config, script: &Script, cluster: &str) -> Result<Job> {
     let target = config.cluster(cluster)?;
+    validate_script_controller(script, target)?;
+    let mut args = vec!["--parsable"];
+    if target.binds_controller() {
+        args.extend(["--clusters", target.controller()]);
+    }
     let output = if target.remote() {
-        let remote = format!(
-            "cd {} && exec sbatch --parsable",
-            shell_quote(&target.working_directory.display().to_string())
-        );
-        text_with_input(
-            "ssh",
-            &[
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "-o",
-                "ControlMaster=auto",
-                "-o",
-                "ControlPersist=120",
-                "-o",
-                "ControlPath=~/.ssh/slurm-log-%C",
-                &target.ssh_host,
-                &remote,
-            ],
-            &script.bytes,
-            None,
-        )?
+        let remote = remote_scheduler_command("sbatch", &args, Some(&target.working_directory));
+        ssh_with_input(&target.ssh_host, &remote, &script.bytes)?
     } else {
         text_with_input(
             "sbatch",
-            &["--parsable"],
+            &args,
             &script.bytes,
             Some(&target.working_directory),
         )?
     };
-    let id = output.trim().split(';').next().unwrap_or("");
+    let mut parts = output.trim().split(';');
+    let id = parts.next().unwrap_or("");
     if !valid_job_id(id) {
         bail!("sbatch returned an invalid job ID: {:?}", output.trim());
+    }
+    let actual_controller = parts.next();
+    if target.remote() && actual_controller.is_none() {
+        bail!(
+            "remote sbatch did not return a controller identity for configured controller {:?}",
+            target.controller()
+        );
+    }
+    if let Some(actual_controller) = actual_controller
+        && actual_controller != target.controller()
+    {
+        bail!(
+            "sbatch submitted to controller {actual_controller:?}, not configured controller {:?}",
+            target.controller()
+        );
+    }
+    if parts.next().is_some() {
+        bail!("sbatch returned malformed parsable output: {:?}", output.trim());
     }
     crate::slurm::invalidate_caches(config);
     Ok(Job {
@@ -244,6 +306,28 @@ pub fn submit(config: &Config, script: &Script, cluster: &str) -> Result<Job> {
 }
 
 pub fn cancel(config: &Config, jobs: &[Job]) -> Result<Vec<String>> {
+    let mut checked = Vec::new();
+    for job in jobs.iter().filter(|job| job.active()) {
+        if !valid_job_id(&job.id) {
+            bail!("invalid job ID {}", job.id);
+        }
+        let fresh = crate::slurm::fresh_cancellable_job(config, &job.cluster, &job.id)?;
+        if !job.name.is_empty() && job.name != fresh.name {
+            bail!(
+                "job {}:{} changed name before cancellation",
+                job.cluster,
+                job.id
+            );
+        }
+        checked.push(fresh);
+    }
+    cancel_verified(config, &checked)
+}
+
+/// Dispatch only jobs that have just passed `fresh_cancellable_job`.  MCP
+/// cancellation invokes that check itself to compare the user-supplied name,
+/// while the CLI and picker enter through `cancel` above.
+pub(crate) fn cancel_verified(config: &Config, jobs: &[Job]) -> Result<Vec<String>> {
     let mut grouped: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for job in jobs.iter().filter(|job| job.active()) {
         if !valid_job_id(&job.id) {
@@ -254,14 +338,16 @@ pub fn cancel(config: &Config, jobs: &[Job]) -> Result<Vec<String>> {
     let mut failures = Vec::new();
     for (cluster, ids) in grouped {
         let target = config.cluster(cluster)?;
+        let mut args = Vec::new();
+        if target.binds_controller() {
+            args.extend(["--clusters", target.controller()]);
+        }
+        args.extend(ids);
         let result = if target.remote() {
-            let command = std::iter::once("scancel".to_string())
-                .chain(ids.iter().map(|id| shell_quote(id)))
-                .collect::<Vec<_>>()
-                .join(" ");
-            ssh(&target.ssh_host, &command).map(|_| ())
+            let command = remote_scheduler_command("scancel", &args, None);
+            crate::command::ssh(&target.ssh_host, &command).map(|_| ())
         } else {
-            text("scancel", &ids).map(|_| ())
+            text("scancel", &args).map(|_| ())
         };
         if let Err(error) = result {
             failures.push(format!("{cluster}: {error:#}"));

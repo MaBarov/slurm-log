@@ -22,9 +22,16 @@ log=$test_root/job.log
 printf 'offline log\n' >"$log"
 cat >"$test_root/bin/scontrol" <<EOF
 #!/bin/sh
-printf 'JobId=4242424242 JobName=focus-training StdOut=$log\n'
+printf 'JobId=4242424242 UserId=offline(1000) JobName=focus-training StdOut=$log\n'
 EOF
-chmod 755 "$test_root/bin/scontrol"
+cat >"$test_root/bin/squeue" <<'EOF'
+#!/bin/sh
+case "$*" in
+    *' -j 4242424242 '*) printf '4242424242|offline|RUNNING|focus-training|00:01|node|cpu|now|1|sbatch\n' ;;
+    *) printf '4242424242|RUNNING|focus-training|00:01|node|cpu|now|1|sbatch|offline\n' ;;
+esac
+EOF
+chmod 755 "$test_root/bin/scontrol" "$test_root/bin/squeue"
 config=$test_root/config.json
 cat >"$config" <<EOF
 {"clusters":[{"name":"local","transport":"local","user":"offline","workingDirectory":"$test_root","accounting":false}],"statePath":"$test_root/state/state.json"}

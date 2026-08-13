@@ -1,19 +1,123 @@
 use anyhow::{Context, Result, bail};
 use std::{
+    cell::RefCell,
     io::{Read, Result as IoResult, Write},
+    os::unix::process::CommandExt,
     path::Path,
-    process::{Command, Output, Stdio},
+    process::{Child, Command, ExitStatus, Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
+    time::{Duration, Instant},
 };
 
+mod resolver;
+
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// The remote scheduler invocation never inherits a login-shell PATH.  Sites
+/// that install Slurm elsewhere should expose an explicit trusted wrapper in
+/// one of these administrator-controlled directories.
+const REMOTE_SCHEDULER_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+
+thread_local! {
+    static REQUEST_CANCEL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+struct CancellationScope {
+    previous: Option<Arc<AtomicBool>>,
+}
+
+impl Drop for CancellationScope {
+    fn drop(&mut self) {
+        REQUEST_CANCEL.with(|current| {
+            current.replace(self.previous.take());
+        });
+    }
+}
+
+/// Bind an MCP request cancellation flag to every child command issued by the
+/// current blocking worker.
+pub fn with_cancellation<T>(cancel: Arc<AtomicBool>, action: impl FnOnce() -> T) -> T {
+    let scope = REQUEST_CANCEL.with(|current| CancellationScope {
+        previous: current.replace(Some(cancel)),
+    });
+    let value = action();
+    drop(scope);
+    value
+}
+
+fn request_cancelled() -> bool {
+    REQUEST_CANCEL.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+    })
+}
+
+fn command(program: &str) -> Command {
+    let mut command = Command::new(resolver::trusted_program(program));
+    // A child owns its own process group so deadline/cancellation can tear
+    // down shell/SSH descendants that retain stdout or stderr pipes.
+    command.process_group(0);
+    resolver::scrub_environment(&mut command);
+    command
+}
+
+fn wait_with_deadline(child: &mut Child, program: &str, deadline: Duration) -> Result<ExitStatus> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("check {program}"))?
+        {
+            // A shell can exit while a background descendant still owns one
+            // of the pipes. Kill that group before joining reader threads.
+            terminate_process_group(child);
+            return Ok(status);
+        }
+        if request_cancelled() {
+            terminate_process_group(child);
+            bail!("{program} was cancelled");
+        }
+        if started.elapsed() >= deadline {
+            terminate_process_group(child);
+            bail!(
+                "{program} exceeded the {}s command deadline",
+                deadline.as_secs()
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn terminate_process_group(child: &mut Child) {
+    if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::Kill);
+    }
+    // Fallback if process-group creation failed before the first poll.
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 pub fn output(program: &str, args: &[&str]) -> Result<Output> {
     output_with_limit(program, args, MAX_COMMAND_OUTPUT_BYTES)
 }
 
 fn output_with_limit(program: &str, args: &[&str], limit: usize) -> Result<Output> {
-    let mut child = Command::new(program)
+    output_with_limit_and_timeout(program, args, limit, COMMAND_TIMEOUT)
+}
+
+fn output_with_limit_and_timeout(
+    program: &str,
+    args: &[&str],
+    limit: usize,
+    deadline: Duration,
+) -> Result<Output> {
+    let mut child = command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -23,15 +127,14 @@ fn output_with_limit(program: &str, args: &[&str], limit: usize) -> Result<Outpu
     let stderr = child.stderr.take().context("capture command stderr")?;
     let stdout_reader = thread::spawn(move || read_bounded(stdout, limit));
     let stderr_reader = thread::spawn(move || read_bounded(stderr, limit));
-    let status = child
-        .wait()
-        .with_context(|| format!("wait for {program}"))?;
+    let status = wait_with_deadline(&mut child, program, deadline);
     let (stdout, stdout_overflow) = stdout_reader
         .join()
         .map_err(|_| anyhow::anyhow!("stdout reader panicked"))??;
     let (stderr, stderr_overflow) = stderr_reader
         .join()
         .map_err(|_| anyhow::anyhow!("stderr reader panicked"))??;
+    let status = status?;
     if stdout_overflow || stderr_overflow {
         bail!(
             "{program} output exceeded {} MiB safety limit",
@@ -85,7 +188,7 @@ fn text_with_input_limit(
     directory: Option<&Path>,
     limit: usize,
 ) -> Result<String> {
-    let mut command = Command::new(program);
+    let mut command = command(program);
     command
         .args(args)
         .stdin(Stdio::piped())
@@ -99,18 +202,20 @@ fn text_with_input_limit(
     let stderr = child.stderr.take().context("capture command stderr")?;
     let stdout_reader = thread::spawn(move || read_bounded(stdout, limit));
     let stderr_reader = thread::spawn(move || read_bounded(stderr, limit));
-    child
-        .stdin
-        .take()
-        .context("open command stdin")?
-        .write_all(input)?;
-    let status = child.wait()?;
+    let mut stdin = child.stdin.take().context("open command stdin")?;
+    let input = input.to_vec();
+    let input_writer = thread::spawn(move || stdin.write_all(&input));
+    let status = wait_with_deadline(&mut child, program, COMMAND_TIMEOUT);
     let (stdout, stdout_overflow) = stdout_reader
         .join()
         .map_err(|_| anyhow::anyhow!("stdout reader panicked"))??;
     let (stderr, stderr_overflow) = stderr_reader
         .join()
         .map_err(|_| anyhow::anyhow!("stderr reader panicked"))??;
+    input_writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("stdin writer panicked"))??;
+    let status = status?;
     if stdout_overflow || stderr_overflow {
         bail!("{program} output exceeded safety limit");
     }
@@ -140,6 +245,52 @@ pub fn ssh(host: &str, remote: &str) -> Result<String> {
     )
 }
 
+/// Run a scheduler command through a deliberately small remote environment.
+/// The outer paths are absolute so a hostile remote login PATH cannot select a
+/// different `env` or shell; the inner scheduler lookup uses only the fixed
+/// administrator-controlled search path.
+pub fn remote_scheduler_command(program: &str, args: &[&str], directory: Option<&Path>) -> String {
+    let invocation = std::iter::once(shell_quote(program))
+        .chain(args.iter().map(|argument| shell_quote(argument)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let script = if let Some(directory) = directory {
+        format!(
+            "cd {} && exec {invocation}",
+            shell_quote(&directory.display().to_string())
+        )
+    } else {
+        format!("exec {invocation}")
+    };
+    format!(
+        "/usr/bin/env -i PATH={} HOME=/ /bin/sh -c {}",
+        shell_quote(REMOTE_SCHEDULER_PATH),
+        shell_quote(&script)
+    )
+}
+
+pub fn ssh_with_input(host: &str, remote: &str, input: &[u8]) -> Result<String> {
+    text_with_input(
+        "ssh",
+        &[
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            "ControlPersist=120",
+            "-o",
+            "ControlPath=~/.ssh/slurm-log-%C",
+            host,
+            remote,
+        ],
+        input,
+        None,
+    )
+}
+
 pub fn shell_quote(value: &str) -> String {
     shell_words::quote(value).into_owned()
 }
@@ -163,6 +314,29 @@ mod tests {
             let output = text("sh", &["-c", &script]).unwrap();
             assert_eq!(output, value);
         }
+    }
+
+    #[test]
+    fn remote_scheduler_wrapper_uses_fixed_paths_and_quotes_arguments() {
+        let command = remote_scheduler_command(
+            "sbatch",
+            &[
+                "--parsable",
+                "--clusters",
+                "controller-a",
+                "$(not-expanded)",
+            ],
+            Some(Path::new("/work space")),
+        );
+        assert!(
+            command.starts_with(
+                "/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/ /bin/sh -c "
+            )
+        );
+        assert!(command.contains("/bin/sh"));
+        assert!(!command.contains("${PATH"));
+        assert!(!command.contains("$PATH"));
+        assert!(command.contains("'$(not-expanded)'"));
     }
 
     #[test]
@@ -223,5 +397,35 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{error:#}").contains("safety limit"));
+    }
+
+    #[test]
+    fn deadline_kills_descendants_that_hold_the_output_pipe() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("descendant.pid");
+        let started = Instant::now();
+        let output = output_with_limit_and_timeout(
+            "sh",
+            &[
+                "-c",
+                "sleep 30 & printf '%s' \"$!\" > \"$1\"; printf ready",
+                "sh",
+                pid_file.to_str().unwrap(),
+            ],
+            1024,
+            Duration::from_millis(250),
+        )
+        .unwrap();
+        assert_eq!(output.stdout, b"ready");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let pid = std::fs::read_to_string(pid_file).unwrap();
+        let process = Path::new("/proc").join(pid.trim());
+        for _ in 0..20 {
+            if !process.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!process.exists(), "background descendant survived cleanup");
     }
 }

@@ -163,6 +163,10 @@ pub fn job_details(config: &Config, cluster: &str, id: &str, force: bool) -> Res
     if !crate::model::valid_job_id(id) {
         bail!("invalid job ID {id}");
     }
+    // The daemon can answer from a short-lived cache; bind even that cache
+    // read to a fresh exact-owner lookup so a reused ID cannot surface data
+    // for a now-foreign job.
+    crate::slurm::authorize_exact_job(config, cluster, id)?;
     let (socket, _) = paths(config);
     let request = Request::Details {
         cluster: cluster.into(),
@@ -188,6 +192,7 @@ pub fn job_details(config: &Config, cluster: &str, id: &str, force: bool) -> Res
 }
 
 pub fn log_metadata(config: &Config, cluster: &str, id: &str) -> Result<LogData> {
+    crate::slurm::authorize_exact_job(config, cluster, id)?;
     log_request(
         config,
         Request::LogMetadata {
@@ -199,6 +204,7 @@ pub fn log_metadata(config: &Config, cluster: &str, id: &str) -> Result<LogData>
 }
 
 pub fn log_window(config: &Config, cluster: &str, id: &str, max_bytes: usize) -> Result<LogData> {
+    crate::slurm::authorize_exact_job(config, cluster, id)?;
     log_request(
         config,
         Request::LogWindow {
@@ -217,6 +223,7 @@ pub fn log_range(
     start: u64,
     max_bytes: usize,
 ) -> Result<LogData> {
+    crate::slurm::authorize_exact_job(config, cluster, id)?;
     log_request(
         config,
         Request::LogRead {

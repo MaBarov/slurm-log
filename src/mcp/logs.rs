@@ -11,6 +11,7 @@ use crate::log_service::{LogData, MAX_LOG_PAYLOAD, MAX_LOG_WINDOW};
 impl McpServer {
     pub(crate) fn read_log(&self, args: &JsonObject) -> Result<Value> {
         let (cluster, id) = exact_job(&self.config, args)?;
+        crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
         let lines = optional_usize(args, "lines", 200)?.clamp(1, 2000);
         let filter = optional_string(args, "filter").unwrap_or("hide_warnings");
         if !["hide_warnings", "all", "warnings", "exceptions"].contains(&filter) {
@@ -59,6 +60,7 @@ impl McpServer {
 
     pub(crate) fn search_log(&self, args: &JsonObject) -> Result<Value> {
         let (cluster, id) = exact_job(&self.config, args)?;
+        crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
         let pattern = required_string(args, "pattern")?;
         if pattern.len() > 1024 {
             bail!("pattern exceeds 1024 bytes");
@@ -122,16 +124,14 @@ impl McpServer {
 
     pub(crate) fn diagnose_job(&self, args: &JsonObject) -> Result<Value> {
         let (cluster, id) = exact_job(&self.config, args)?;
+        let authorized = crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
         let archive = self.config.cluster(cluster)?.accounting;
-        let (jobs, _, warnings) = crate::slurm::all_jobs(&self.config, cluster, "all", archive)?;
-        let job = jobs.into_iter().find(|job| job.id == id);
+        let (_, _, warnings) = crate::slurm::all_jobs(&self.config, cluster, "all", archive)?;
+        let job = authorized;
         let details = crate::daemon::job_details(&self.config, cluster, id, false).ok();
         let log = crate::daemon::log_window(&self.config, cluster, id, MAX_LOG_WINDOW)?;
-        if job.is_none() && details.is_none() && log.status == "not_found" {
-            bail!("job {cluster}:{id} was not found");
-        }
         let text = sanitize(&log.bytes);
-        let findings = findings(job.as_ref(), details.as_ref(), &log, &text);
+        let findings = findings(Some(&job), details.as_ref(), &log, &text);
         Ok(json!({
             "ok":true,"cluster":cluster,"job_id":id,"job":job,"details":details,
             "log_status":log.status,"findings":findings,"scheduler_warnings":warnings,

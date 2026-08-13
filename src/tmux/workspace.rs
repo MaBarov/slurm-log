@@ -152,7 +152,9 @@ fn setup(config: &Config, session: &str) -> Result<()> {
     ] {
         tmux(args)?;
     }
-    tmux(["set-option", "-s", "set-clipboard", "on"])?;
+    // Do not let arbitrary application/log OSC-52 sequences update the
+    // terminal clipboard. Explicit tmux copy-mode selection remains available.
+    tmux(["set-option", "-s", "set-clipboard", "external"])?;
     for table in ["copy-mode", "copy-mode-vi"] {
         for (key, command) in [
             ("MouseDragEnd1Pane", "send-keys -X stop-selection"),

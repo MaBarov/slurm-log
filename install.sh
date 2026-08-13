@@ -17,6 +17,8 @@
 #   --binary FILE           Install an existing binary instead of building
 #   --build                 Build this checkout instead of downloading a release
 #   --version TAG           Install a release tag (default: latest)
+#   --release-public-key FILE  Trusted Ed25519 public-key PEM for a prebuilt download
+#   --allow-downgrade       Permit replacing a newer installed version
 #   --force-config          Replace an existing configuration
 #   Setup starts automatically on interactive installations.
 #   --no-setup              Skip the interactive setup wizard
@@ -34,6 +36,8 @@ state_path=
 binary=
 build_source=0
 release_version=${SLURM_LOG_VERSION:-latest}
+release_public_key_file=${SLURM_LOG_RELEASE_PUBLIC_KEY_FILE:-}
+allow_downgrade=0
 force_config=0
 path_update=1
 run_setup=1
@@ -48,7 +52,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 usage() {
-    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -61,6 +65,8 @@ while [ "$#" -gt 0 ]; do
         --binary) binary=$2; shift 2 ;;
         --build) build_source=1; shift ;;
         --version) release_version=$2; shift 2 ;;
+        --release-public-key) release_public_key_file=$2; shift 2 ;;
+        --allow-downgrade) allow_downgrade=1; shift ;;
         --force-config) force_config=1; shift ;;
         --no-setup) run_setup=0; shift ;;
         --no-path-update) path_update=0; shift ;;
@@ -136,16 +142,119 @@ build_release() {
     binary=$script_dir/target/release/slurm-log
 }
 
+max_archive_bytes=134217728
+max_manifest_bytes=4096
+max_signature_bytes=64
+
 download_file() {
     source_url=$1
     destination=$2
-    if command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 2 --connect-timeout 10 -o "$destination" "$source_url"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=10 -O "$destination" "$source_url"
-    else
-        printf 'Install curl or wget to download a release.\n' >&2
+    maximum=$3
+    if ! command -v curl >/dev/null 2>&1; then
+        printf 'curl is required for bounded prebuilt-release downloads.\n' >&2
         return 1
+    fi
+    # curl's advertised max-filesize can depend on a response Content-Length.
+    # A subshell file-size rlimit supplies a hard write bound even for a
+    # chunked or malicious response; the exact byte cap is checked below.
+    maximum_blocks=$(( (maximum + 511) / 512 ))
+    (
+        ulimit -f "$maximum_blocks" || exit 1
+        exec curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 \
+            --max-filesize "$maximum" --proto '=https,file' -o "$destination" "$source_url"
+    ) || return 1
+    [ -f "$destination" ] && [ ! -L "$destination" ] || return 1
+    size=$(wc -c <"$destination" | tr -d ' ')
+    [ "$size" -gt 0 ] && [ "$size" -le "$maximum" ] || return 1
+}
+
+valid_version() {
+    version_value=$1
+    case "$version_value" in ''|*[!0-9.]*) return 1 ;; esac
+    old_ifs=$IFS
+    IFS=.
+    set -- $version_value
+    IFS=$old_ifs
+    [ "$#" -eq 3 ] || return 1
+    for part in "$@"; do
+        case "$part" in
+            0|[1-9]|[1-9][0-9]*) ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
+version_less() {
+    awk -v candidate="$1" -v installed="$2" '
+        BEGIN {
+            split(candidate, c, "."); split(installed, i, ".");
+            for (n = 1; n <= 3; n++) {
+                if (c[n] + 0 < i[n] + 0) exit 0;
+                if (c[n] + 0 > i[n] + 0) exit 1;
+            }
+            exit 1;
+        }'
+}
+
+verify_manifest() {
+    manifest=$1
+    signature=$2
+    expected_asset=$3
+    expected_target=$4
+    [ -n "$release_public_key_file" ] && [ -f "$release_public_key_file" ] && [ ! -L "$release_public_key_file" ] && \
+        [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -gt 0 ] && \
+        [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -le "$max_manifest_bytes" ] || {
+        printf 'A trusted --release-public-key PEM is required for a prebuilt download.\n' >&2
+        return 2
+    }
+    command -v openssl >/dev/null 2>&1 || {
+        printf 'openssl is required to verify the signed release manifest.\n' >&2
+        return 2
+    }
+    [ "$(wc -c <"$manifest" | tr -d ' ')" -le "$max_manifest_bytes" ] || return 2
+    [ "$(wc -c <"$signature" | tr -d ' ')" -eq "$max_signature_bytes" ] || return 2
+    openssl pkeyutl -verify -pubin -inkey "$release_public_key_file" -rawin \
+        -in "$manifest" -sigfile "$signature" >/dev/null 2>&1 || {
+        printf 'Release manifest signature verification failed; nothing was installed.\n' >&2
+        return 2
+    }
+    [ "$(wc -l <"$manifest" | tr -d ' ')" -eq 6 ] || return 2
+    header=$(sed -n '1p' "$manifest")
+    version_line=$(sed -n '2p' "$manifest")
+    target_line=$(sed -n '3p' "$manifest")
+    archive_line=$(sed -n '4p' "$manifest")
+    digest_line=$(sed -n '5p' "$manifest")
+    size_line=$(sed -n '6p' "$manifest")
+    [ "$header" = slurm-log-release-v1 ] || return 2
+    manifest_version=${version_line#version=}
+    manifest_target=${target_line#target=}
+    manifest_archive=${archive_line#archive=}
+    manifest_digest=${digest_line#sha256=}
+    manifest_size=${size_line#size=}
+    [ "version=$manifest_version" = "$version_line" ] && valid_version "$manifest_version" || return 2
+    [ "$target_line" = "target=$expected_target" ] || return 2
+    [ "$archive_line" = "archive=$expected_asset" ] || return 2
+    [ "${#manifest_digest}" -eq 64 ] || return 2
+    case "$manifest_digest" in *[!0-9a-f]*) return 2 ;; esac
+    case "$manifest_size" in ''|*[!0-9]*) return 2 ;; esac
+    [ "$manifest_size" -gt 0 ] && [ "$manifest_size" -le "$max_archive_bytes" ] || return 2
+    if [ "$release_version" != latest ] && [ "$manifest_version" != "${release_version#v}" ]; then
+        printf 'Signed manifest version does not match requested release tag.\n' >&2
+        return 2
+    fi
+}
+
+verify_archive() {
+    archive=$1
+    checksum=$2
+    expected=$(awk 'NR == 1 { print $1 }' "$checksum" | tr '[:upper:]' '[:lower:]')
+    actual=$(sha256sum "$archive" | awk '{ print $1 }')
+    size=$(wc -c <"$archive" | tr -d ' ')
+    if ! printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || \
+       [ "$expected" != "$manifest_digest" ] || [ "$actual" != "$manifest_digest" ] || \
+       [ "$size" != "$manifest_size" ]; then
+        printf 'Release checksum or signed manifest verification failed; nothing was installed.\n' >&2
+        return 2
     fi
 }
 
@@ -157,8 +266,8 @@ download_release() {
             return 1
             ;;
     esac
-    if ! command -v sha256sum >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
-        printf 'sha256sum and tar are required to install a prebuilt release.\n' >&2
+    if ! command -v sha256sum >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
+        printf 'sha256sum, tar, and timeout are required to install a prebuilt release.\n' >&2
         return 1
     fi
 
@@ -176,22 +285,25 @@ download_release() {
     release_tmp=$(mktemp -d) || return 1
     archive=$release_tmp/$asset
     checksum=$archive.sha256
-    printf 'Downloading slurm-log %s for Linux %s...\n' "$release_version" "$architecture"
-    if ! download_file "$release_base/$asset" "$archive" ||
-       ! download_file "$release_base/$asset.sha256" "$checksum"; then
+    manifest=$archive.manifest
+    signature=$manifest.sig
+    printf 'Downloading signed slurm-log %s for Linux %s...\n' "$release_version" "$architecture"
+    if ! download_file "$release_base/$asset.manifest" "$manifest" "$max_manifest_bytes" ||
+       ! download_file "$release_base/$asset.manifest.sig" "$signature" "$max_signature_bytes"; then
         printf 'Prebuilt release is unavailable.\n' >&2
         return 1
     fi
-
-    expected=$(awk 'NR == 1 { print $1 }' "$checksum" | tr '[:upper:]' '[:lower:]')
-    actual=$(sha256sum "$archive" | awk '{ print $1 }')
-    if ! printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || [ "$expected" != "$actual" ]; then
-        printf 'Release checksum verification failed; nothing was installed.\n' >&2
-        return 2
+    verify_manifest "$manifest" "$signature" "$asset" x86_64-unknown-linux-musl || return $?
+    if ! download_file "$release_base/$asset" "$archive" "$manifest_size" ||
+       ! download_file "$release_base/$asset.sha256" "$checksum" "$max_manifest_bytes"; then
+        printf 'Prebuilt release is unavailable.\n' >&2
+        return 1
     fi
+    verify_archive "$archive" "$checksum" || return $?
     mkdir -p "$release_tmp/payload"
-    if ! tar -xzf "$archive" -C "$release_tmp/payload" slurm-log/bin/slurm-log; then
-        printf 'Release archive does not contain the expected binary.\n' >&2
+    if ! timeout 30 tar -xzf "$archive" --no-same-owner --no-same-permissions \
+        -C "$release_tmp/payload" slurm-log/bin/slurm-log; then
+        printf 'Release archive does not contain a safe binary within the extraction deadline.\n' >&2
         return 2
     fi
     candidate=$release_tmp/payload/slurm-log/bin/slurm-log
@@ -204,6 +316,11 @@ download_release() {
         printf 'Release binary failed its startup check.\n' >&2
         return 2
     fi
+    candidate_version=$("$candidate" --version 2>/dev/null || true)
+    [ "$candidate_version" = "slurm-log $manifest_version" ] || {
+        printf 'Release binary version does not match the signed manifest.\n' >&2
+        return 2
+    }
     binary=$candidate
 }
 
@@ -225,6 +342,23 @@ fi
 if ! "$binary" --help >/dev/null 2>&1; then
     printf 'Binary failed its startup check: %s\n' "$binary" >&2
     exit 1
+fi
+
+candidate_version=$("$binary" --version 2>/dev/null || true)
+candidate_version=${candidate_version#slurm-log }
+valid_version "$candidate_version" || {
+    printf 'Binary did not report a strict slurm-log version: %s\n' "$binary" >&2
+    exit 1
+}
+installed_binary=$prefix/bin/slurm-log
+if [ "$allow_downgrade" -ne 1 ] && [ -x "$installed_binary" ]; then
+    installed_version=$("$installed_binary" --version 2>/dev/null || true)
+    installed_version=${installed_version#slurm-log }
+    if valid_version "$installed_version" && version_less "$candidate_version" "$installed_version"; then
+        printf 'Refusing to replace slurm-log %s with older %s; use --allow-downgrade only deliberately.\n' \
+            "$installed_version" "$candidate_version" >&2
+        exit 1
+    fi
 fi
 
 umask 077

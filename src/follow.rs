@@ -431,7 +431,8 @@ fn filter_log(
             }
             continuation = false;
         }
-        write!(output, "{plain}{}", if terminal { "\r\n" } else { "\n" })?;
+        let safe = crate::model::terminal_text(plain);
+        write!(output, "{safe}{}", if terminal { "\r\n" } else { "\n" })?;
     }
     Ok(())
 }

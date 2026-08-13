@@ -27,8 +27,14 @@ run_check clippy cargo clippy --locked --manifest-path "$manifest" --all-targets
 run_check correctness cargo test --locked --manifest-path "$manifest"
 run_check performance cargo test --locked --release --manifest-path "$manifest" -- --ignored
 # Integration tests execute target/release/slurm-log, which is distinct from
-# Cargo's release test harness and must never be allowed to remain stale.
+# Cargo's release test harness and must never be allowed to remain stale. Keep
+# the production build as a release-mode check, then build the hermetic
+# fake-command variant used by the offline process suite.
 run_check release-build cargo build --locked --release --manifest-path "$manifest"
+run_check integration-test-build env \
+    SLURM_LOG_TEST_BUILD=1 \
+    SLURM_LOG_TEST_RELEASE_PUBLIC_KEY=7777777777777777777777777777777777777777777777777777777777777777 \
+    cargo build --locked --release --manifest-path "$manifest"
 run_check install-syntax sh -n "$project_dir/install.sh"
 run_check update-syntax sh -n "$project_dir/update.sh"
 run_check uninstall-syntax sh -n "$project_dir/uninstall.sh"
@@ -40,10 +46,12 @@ run_check coverage-syntax sh -n "$project_dir/coverage.sh"
 for test_script in package_smoke offline_hostile follower_paths pane_close interactive_pane \
     details_pane details_direct focus_toast cli_surface picker_controls daemon_integration \
     workspace_controls reconcile_paths feature_coverage bank_actions bank_ui cluster_tabs \
-    degraded_clusters smart_close setup_wizard mcp_server source_layout; do
+    degraded_clusters smart_close setup_wizard mcp_server mcp_setup mutation_bindings \
+    mcp_owner_isolation source_layout release_workflow; do
     run_check "$test_script-syntax" sh -n "$project_dir/tests/$test_script.sh"
 done
 run_check source_layout "$project_dir/tests/source_layout.sh"
+run_check release_workflow "$project_dir/tests/release_workflow.sh"
 run_check package_smoke "$project_dir/tests/package_smoke.sh"
 run_check offline_hostile "$project_dir/tests/offline_hostile.sh"
 run_check follower_paths "$project_dir/tests/follower_paths.sh"
@@ -65,4 +73,7 @@ run_check degraded_clusters "$project_dir/tests/degraded_clusters.sh"
 run_check smart_close "$project_dir/tests/smart_close.sh"
 run_check setup_wizard "$project_dir/tests/setup_wizard.sh"
 run_check mcp_server "$project_dir/tests/mcp_server.sh"
+run_check mcp_setup sh "$project_dir/tests/mcp_setup.sh"
+run_check mutation_bindings "$project_dir/tests/mutation_bindings.sh"
+run_check mcp_owner_isolation "$project_dir/tests/mcp_owner_isolation.sh"
 printf 'all slurm-log tests passed\n'

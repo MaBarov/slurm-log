@@ -262,6 +262,7 @@ fn local_config(path: PathBuf) -> Config {
         sbatch_banks: Vec::new(),
         clusters: vec![crate::config::ClusterConfig {
             name: "local".into(),
+            controller: None,
             transport: "local".into(),
             user: "offline".into(),
             ssh_host: String::new(),
@@ -316,7 +317,7 @@ fn stream_handler_supports_ping_stop_and_rejects_invalid_inputs() {
 }
 
 #[test]
-fn stream_handler_serves_cached_queries_and_details_without_scheduler_calls() {
+fn stream_handler_serves_cached_queries_without_scheduler_calls() {
     let directory = tempfile::tempdir().unwrap();
     let config = local_config(directory.path().join("state.json"));
     let now = Instant::now();
@@ -340,11 +341,7 @@ fn stream_handler_serves_cached_queries_and_details_without_scheduler_calls() {
             reply: Arc::new(snapshot),
         },
     )])));
-    let detail_key = concat!("local\0", "42");
-    let details = Arc::new(Mutex::new(HashMap::from([(
-        detail_key.into(),
-        detail_entry(now, now, detail("local", "42", true)),
-    )])));
+    let details = Arc::new(Mutex::new(HashMap::new()));
 
     for force in [false, true] {
         let (mut client, mut server) = UnixStream::pair().unwrap();
@@ -362,20 +359,6 @@ fn stream_handler_serves_cached_queries_and_details_without_scheduler_calls() {
         let reply: Reply = read_frame(&mut client).unwrap();
         assert_eq!(reply.jobs[0].id, "42");
     }
-
-    let (mut client, mut server) = UnixStream::pair().unwrap();
-    write_frame(
-        &mut client,
-        &Request::Details {
-            cluster: "local".into(),
-            id: "42".into(),
-            force: true,
-        },
-    )
-    .unwrap();
-    assert!(!handle_stream(&config, &cache, &details, &mut server).unwrap());
-    let reply: Reply = read_frame(&mut client).unwrap();
-    assert!(reply.details.unwrap().terminal);
 
     let (mut client, mut server) = UnixStream::pair().unwrap();
     write_frame(

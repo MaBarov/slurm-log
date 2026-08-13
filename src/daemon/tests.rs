@@ -68,6 +68,7 @@ fn config(path: PathBuf) -> Config {
         sbatch_banks: Vec::new(),
         clusters: vec![crate::config::ClusterConfig {
             name: "cispa".into(),
+            controller: None,
             transport: "ssh".into(),
             user: "alice".into(),
             ssh_host: "cluster".into(),
@@ -281,10 +282,7 @@ fn newer_cluster_snapshot_invalidates_only_older_combined_snapshots() {
 }
 
 #[test]
-fn terminal_detail_snapshot_is_served_without_scheduler_access() {
-    let directory = tempfile::tempdir().unwrap();
-    let config = config(directory.path().join("state.json"));
-    let cache = Arc::new(Mutex::new(HashMap::new()));
+fn terminal_detail_snapshot_is_reused_by_the_cache_resolver() {
     let now = Instant::now();
     let details = Arc::new(Mutex::new(HashMap::from([(
         format!("cispa\0{}", "42"),
@@ -301,18 +299,9 @@ fn terminal_detail_snapshot_is_served_without_scheduler_access() {
             },
         },
     )])));
-    let (mut client, mut server) = UnixStream::pair().unwrap();
-    write_frame(
-        &mut client,
-        &Request::Details {
-            cluster: "cispa".into(),
-            id: "42".into(),
-            force: false,
-        },
-    )
-    .unwrap();
-    assert!(!handle_stream(&config, &cache, &details, &mut server).unwrap());
-    let reply: Reply = read_frame(&mut client).unwrap();
+    let reply = resolve_detail_reply(&details, "cispa\0".to_string() + "42", false, |_| {
+        panic!("terminal cache entry unexpectedly refreshed")
+    });
     assert_eq!(reply.details.unwrap().state, "COMPLETED");
 }
 

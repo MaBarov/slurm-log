@@ -7,6 +7,7 @@
 # Options:
 #   --prefix DIR    Installed prefix (default: ~/.local)
 #   --binary FILE   Explicit new slurm-log binary
+#   --allow-downgrade  Permit replacing a newer installed version
 #   -h, --help      Show this help
 #
 # Configuration, caches, and job history are never replaced. The installed
@@ -17,9 +18,10 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 prefix=${HOME}/.local
 binary=
+allow_downgrade=0
 
 usage() {
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -36,6 +38,7 @@ while [ "$#" -gt 0 ]; do
             binary=$value
             shift 2
             ;;
+        --allow-downgrade) allow_downgrade=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
@@ -59,6 +62,45 @@ target=$prefix/bin/slurm-log
 # Reject a corrupt or incompatible release before touching the running install.
 if ! "$binary" --help >/dev/null 2>&1; then
     printf 'The new binary failed its startup check; installation was not changed.\n' >&2
+    exit 1
+fi
+
+valid_version() {
+    value=$1
+    case "$value" in ''|*[!0-9.]*) return 1 ;; esac
+    old_ifs=$IFS
+    IFS=.
+    set -- $value
+    IFS=$old_ifs
+    [ "$#" -eq 3 ] || return 1
+    for part in "$@"; do
+        case "$part" in 0|[1-9]|[1-9][0-9]*) ;; *) return 1 ;; esac
+    done
+}
+
+version_less() {
+    awk -v candidate="$1" -v installed="$2" '
+        BEGIN {
+            split(candidate, c, "."); split(installed, i, ".");
+            for (n = 1; n <= 3; n++) {
+                if (c[n] + 0 < i[n] + 0) exit 0;
+                if (c[n] + 0 > i[n] + 0) exit 1;
+            }
+            exit 1;
+        }'
+}
+
+candidate_version=$("$binary" --version 2>/dev/null || true)
+candidate_version=${candidate_version#slurm-log }
+installed_version=$("$target" --version 2>/dev/null || true)
+installed_version=${installed_version#slurm-log }
+valid_version "$candidate_version" && valid_version "$installed_version" || {
+    printf 'Update requires strict slurm-log X.Y.Z version output.\n' >&2
+    exit 1
+}
+if [ "$allow_downgrade" -ne 1 ] && version_less "$candidate_version" "$installed_version"; then
+    printf 'Refusing to replace slurm-log %s with older %s; use --allow-downgrade only deliberately.\n' \
+        "$installed_version" "$candidate_version" >&2
     exit 1
 fi
 

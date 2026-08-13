@@ -7,6 +7,11 @@ use serde::Deserialize;
 #[serde(rename_all = "camelCase")]
 pub struct ClusterConfig {
     pub name: String,
+    /// Slurm controller identity.  `name` is a local display label and older
+    /// configurations used it for both purposes, so an absent value retains
+    /// that behaviour while allowing a label to differ from the controller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
     pub transport: String,
     pub user: String,
     #[serde(default)]
@@ -23,6 +28,7 @@ fn accounting_default() -> bool {
 fn default_clusters(local_user: &str) -> Vec<ClusterConfig> {
     vec![ClusterConfig {
         name: "local".into(),
+        controller: None,
         transport: "local".into(),
         user: local_user.into(),
         ssh_host: String::new(),
@@ -34,6 +40,21 @@ fn default_clusters(local_user: &str) -> Vec<ClusterConfig> {
 impl ClusterConfig {
     pub fn remote(&self) -> bool {
         self.transport == "ssh"
+    }
+
+    /// The scheduler-controller name used for an exact target binding.
+    ///
+    /// Existing configurations did not have a separate controller field, so
+    /// their display name remains the compatibility fallback.
+    pub fn controller(&self) -> &str {
+        self.controller.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Whether this target can be passed explicitly to Slurm commands.  The
+    /// historical implicit `local` target remains usable for old local-only
+    /// configurations; remote targets always bind explicitly.
+    pub fn binds_controller(&self) -> bool {
+        self.remote() || self.controller.is_some() || self.name != "local"
     }
 }
 
@@ -142,6 +163,7 @@ impl Config {
         let clusters = file.clusters.unwrap_or_else(|| default_clusters(&local));
         harden_existing(&config_path)?;
         if harden_state {
+            secure_state_directory(&state_path)?;
             harden_existing(&state_path)?;
             harden_existing(&state_path.with_extension("lock"))?;
             harden_existing(&state_path.with_extension("archive-cache.json"))?;
@@ -203,8 +225,10 @@ impl Config {
             bail!("at most 64 sbatch banks may be configured");
         }
         for bank in &self.sbatch_banks {
-            if bank.path.as_os_str().is_empty() {
-                bail!("sbatch bank path must not be empty");
+            if bank.path.as_os_str().is_empty()
+                || bank.path.to_string_lossy().chars().any(char::is_control)
+            {
+                bail!("sbatch bank path must be non-empty and contain no control characters");
             }
             if let Some(name) = &bank.name
                 && (name.trim().is_empty() || name.len() > 80 || name.chars().any(char::is_control))
@@ -229,14 +253,30 @@ impl Config {
             if !names.insert(&cluster.name) {
                 bail!("duplicate cluster name {}", cluster.name);
             }
+            if let Some(controller) = &cluster.controller
+                && (controller.is_empty()
+                    || controller.len() > 48
+                    || !controller
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+                    || ["all", "both"].contains(&controller.as_str()))
+            {
+                bail!("invalid or reserved controller name {controller}");
+            }
             if !["local", "ssh"].contains(&cluster.transport.as_str()) {
                 bail!("cluster {} transport must be local or ssh", cluster.name);
             }
             if cluster.user.is_empty() || cluster.user.chars().any(char::is_control) {
                 bail!("cluster {} has an invalid user", cluster.name);
             }
-            if cluster.working_directory.as_os_str().is_empty() {
-                bail!("cluster {} has an empty working directory", cluster.name);
+            if cluster.working_directory.as_os_str().is_empty()
+                || cluster
+                    .working_directory
+                    .to_string_lossy()
+                    .chars()
+                    .any(char::is_control)
+            {
+                bail!("cluster {} has an invalid working directory", cluster.name);
             }
             if cluster.remote()
                 && (cluster.ssh_host.is_empty()
@@ -308,140 +348,30 @@ fn harden_existing(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    fn config() -> Config {
-        Config {
-            local_user: "alice".into(),
-            remote_user: "alice.cluster".into(),
-            ssh_host: "cluster-alias".into(),
-            state_path: PathBuf::from("/tmp/slurm-log-test-state.json"),
-            executable: PathBuf::from("slurm-log"),
-            sbatch_banks: Vec::new(),
-            clusters: vec![ClusterConfig {
-                name: "sprint".into(),
-                transport: "local".into(),
-                user: "alice".into(),
-                ssh_host: String::new(),
-                working_directory: PathBuf::from("/tmp"),
-                accounting: false,
-            }],
-        }
-    }
-
-    #[test]
-    fn child_args_preserve_uniform_cli_overrides_without_flattening_hosts() {
-        let mut value = config();
-        value.local_user = "override-local".into();
-        value.clusters[0].user = "override-local".into();
-        let args = value.child_args();
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--local-user", "override-local"])
-        );
-
-        value.remote_user = "override-remote".into();
-        value.ssh_host = "override.invalid".into();
-        value.clusters.push(ClusterConfig {
-            name: "one".into(),
-            transport: "ssh".into(),
-            user: "override-remote".into(),
-            ssh_host: "one.invalid".into(),
-            working_directory: PathBuf::from("/tmp"),
-            accounting: true,
-        });
-        value.clusters.push(ClusterConfig {
-            name: "two".into(),
-            transport: "ssh".into(),
-            user: "override-remote".into(),
-            ssh_host: "two.invalid".into(),
-            working_directory: PathBuf::from("/tmp"),
-            accounting: true,
-        });
-        let args = value.child_args();
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--remote-user", "override-remote"])
-        );
-        assert!(!args.iter().any(|argument| argument == "--ssh-host"));
-
-        for cluster in value.clusters.iter_mut().filter(|cluster| cluster.remote()) {
-            cluster.ssh_host = "override.invalid".into();
-        }
-        let args = value.child_args();
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--ssh-host", "override.invalid"])
+fn secure_state_directory(state_path: &std::path::Path) -> Result<()> {
+    let directory = state_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    fs::create_dir_all(directory)
+        .with_context(|| format!("create private state directory {}", directory.display()))?;
+    let metadata = fs::symlink_metadata(directory)
+        .with_context(|| format!("inspect private state directory {}", directory.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "state parent must be a real directory: {}",
+            directory.display()
         );
     }
-
-    #[test]
-    fn safe_configuration_is_accepted() {
-        assert!(config().validate().is_ok());
-        let mut local_only = config();
-        local_only.ssh_host.clear();
-        assert!(local_only.validate().is_ok());
+    if metadata.permissions().mode() & 0o077 != 0 {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("secure private state directory {}", directory.display()))?;
     }
-
-    #[test]
-    fn fresh_configuration_has_one_neutral_local_cluster() {
-        let clusters = default_clusters("alice");
-        assert_eq!(clusters.len(), 1);
-        assert_eq!(clusters[0].name, "local");
-        assert_eq!(clusters[0].transport, "local");
-        assert_eq!(clusters[0].user, "alice");
-        assert!(!clusters[0].accounting);
-    }
-
-    #[test]
-    fn accepts_new_and_legacy_bank_shapes() {
-        let modern: FileConfig =
-            serde_json::from_str(r#"{"sbatchBanks":[{"path":"/a","name":"A"},{"path":"/b"}]}"#)
-                .unwrap();
-        assert_eq!(modern.sbatch_banks.unwrap().len(), 2);
-        let legacy: FileConfig = serde_json::from_str(r#"{"sbatchBank":"/old"}"#).unwrap();
-        assert_eq!(legacy.sbatch_bank.unwrap(), PathBuf::from("/old"));
-    }
-
-    #[test]
-    fn ssh_option_injection_and_control_characters_are_rejected() {
-        let mut value = config();
-        value.ssh_host = "-oProxyCommand=evil".into();
-        assert!(value.validate().is_err());
-        value = config();
-        value.remote_user = "alice\nother".into();
-        assert!(value.validate().is_err());
-    }
-
-    #[test]
-    fn legacy_world_readable_metadata_is_migrated_to_private() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("state.json");
-        fs::write(&path, b"{}").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
-        harden_existing(&path).unwrap();
-        assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-
-    #[test]
-    fn configurable_clusters_are_unique_and_safely_named() {
-        let mut value = config();
-        value.clusters.push(value.clusters[0].clone());
-        assert!(value.validate().is_err());
-        value = config();
-        value.clusters[0].name = "../../host".into();
-        assert!(value.validate().is_err());
-        value = config();
-        value.clusters[0].transport = "command".into();
-        assert!(value.validate().is_err());
-    }
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "config/tests/base.rs"]
+mod tests;
 #[cfg(test)]
 #[path = "config/tests/extra.rs"]
 mod tests_extra;

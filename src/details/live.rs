@@ -2,12 +2,17 @@ fn sample_running(
     config: &Config,
     cluster: &str,
     id: &str,
-    job: Job,
+    _authorized: Job,
     previous: &JobDetails,
 ) -> Result<JobDetails> {
+    // Sstat has no returned owner field. Repeat the exact owner query
+    // immediately before this supplemental metadata access and bind the
+    // rendered state to that fresh object.
+    let job = crate::slurm::authorize_exact_job(config, cluster, id)?;
     let fields = "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,AveRSS,TRESUsageInAve,TRESUsageInMax";
+    let cluster_option = crate::slurm::accounting_cluster_option(config, cluster)?;
     let command = format!(
-        "sstat -a -j {} -n -P --format={} 2>/dev/null",
+        "sstat{cluster_option} -a -j {} -n -P --format={} 2>/dev/null",
         shell_quote(id),
         shell_quote(fields)
     );
@@ -101,12 +106,11 @@ fn from_live_queue(job: Job) -> JobDetails {
 }
 
 fn live_details(config: &Config, job: Job) -> Result<JobDetails> {
-    let output = crate::slurm::scheduler_text(
-        config,
-        &job.cluster,
-        "scontrol",
-        &["show", "job", "-o", &job.id],
-    )?;
+    let output = crate::slurm::control_job_text(config, &job.cluster, &job.id)?;
+    // This raw controller response is security-sensitive: the fresh squeue
+    // authorization above cannot justify parsing fields from a different job
+    // if an ID is reused or a controller response is mismatched.
+    crate::slurm::validate_control_identity(config, &job.cluster, &job.id, &output)?;
     parse_live_control(&output, job).ok_or_else(|| anyhow::anyhow!("invalid scontrol response"))
 }
 
@@ -134,29 +138,29 @@ fn parse_live_control(input: &str, job: Job) -> Option<JobDetails> {
     Some(JobDetails {
         cluster: job.cluster,
         id: job.id,
-        name: value("JobName").unwrap_or(&job.name).into(),
-        state: value("JobState").unwrap_or(&job.state).into(),
-        reason: value("Reason").unwrap_or(&job.reason).into(),
-        partition: value("Partition").unwrap_or(&job.partition).into(),
-        account: value("Account").unwrap_or("").into(),
-        qos: value("QOS").unwrap_or("").into(),
-        submit: value("SubmitTime").unwrap_or("").into(),
-        start: value("StartTime").unwrap_or(&job.start_time).into(),
-        end: value("EndTime").unwrap_or("").into(),
+        name: crate::model::terminal_text(value("JobName").unwrap_or(&job.name)),
+        state: crate::model::terminal_text(value("JobState").unwrap_or(&job.state)),
+        reason: crate::model::terminal_text(value("Reason").unwrap_or(&job.reason)),
+        partition: crate::model::terminal_text(value("Partition").unwrap_or(&job.partition)),
+        account: crate::model::terminal_text(value("Account").unwrap_or("")),
+        qos: crate::model::terminal_text(value("QOS").unwrap_or("")),
+        submit: crate::model::terminal_text(value("SubmitTime").unwrap_or("")),
+        start: crate::model::terminal_text(value("StartTime").unwrap_or(&job.start_time)),
+        end: crate::model::terminal_text(value("EndTime").unwrap_or("")),
         elapsed_seconds: parse_duration(&elapsed).unwrap_or(0),
-        elapsed,
-        time_limit: value("TimeLimit").unwrap_or("").into(),
+        elapsed: crate::model::terminal_text(&elapsed),
+        time_limit: crate::model::terminal_text(value("TimeLimit").unwrap_or("")),
         nodes,
         cpus,
         requested_cpus,
         memory_bytes,
-        requested_memory: display_requested_memory(tres_value(req_tres, "mem").unwrap_or("")),
+        requested_memory: crate::model::terminal_text(&display_requested_memory(tres_value(req_tres, "mem").unwrap_or(""))),
         gpus,
-        gpu_types,
-        alloc_tres: alloc_tres.into(),
-        req_tres: req_tres.into(),
-        node_list: value("NodeList").unwrap_or("").into(),
-        exit_code: value("ExitCode").unwrap_or("").into(),
+        gpu_types: crate::model::terminal_text(&gpu_types),
+        alloc_tres: crate::model::terminal_text(alloc_tres),
+        req_tres: crate::model::terminal_text(req_tres),
+        node_list: crate::model::terminal_text(value("NodeList").unwrap_or("")),
+        exit_code: crate::model::terminal_text(value("ExitCode").unwrap_or("")),
         source: "scontrol".into(),
         sampled_at: timestamp(),
         terminal: false,

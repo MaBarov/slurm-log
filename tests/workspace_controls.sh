@@ -33,28 +33,32 @@ printf 'base\n' >"$phase"
 cat >"$fake_bin/scontrol" <<'EOF'
 #!/bin/sh
 case "$*" in
-    'show job 101')
-        printf 'JobId=101 JobName=workspace-job JobState=RUNNING StdOut=%s/job.log\n' "$WORKSPACE_ROOT"
+    *'show job -o 101'*)
+        printf 'JobId=101 UserId=offline(1000) JobName=workspace-job JobState=RUNNING StdOut=%s/job.log\n' "$WORKSPACE_ROOT"
         ;;
-    'show job 102')
-        printf 'JobId=102 JobName=auto-start JobState=RUNNING StdOut=%s/job-102.log\n' "$WORKSPACE_ROOT"
+    *'show job -o 102'*)
+        printf 'JobId=102 UserId=offline(1000) JobName=auto-start JobState=RUNNING StdOut=%s/job-102.log\n' "$WORKSPACE_ROOT"
         ;;
     *) exit 31 ;;
 esac
 EOF
 cat >"$fake_bin/squeue" <<'EOF'
 #!/bin/sh
-printf '101|RUNNING|workspace-job|00:01|node|cpu|2026-08-12T10:00:00|100|run.sbatch\n'
+case "$*" in
+    *' -j 101 '*'%i|%u|%T'*) printf '101|offline|RUNNING|workspace-job|00:01|node|cpu|2026-08-12T10:00:00|100|run.sbatch\n'; exit 0 ;;
+    *' -j 102 '*'%i|%u|%T'*) printf '102|offline|RUNNING|auto-start|00:01|node|cpu|2026-08-12T10:01:00|100|auto.sbatch\n'; exit 0 ;;
+esac
+printf '101|RUNNING|workspace-job|00:01|node|cpu|2026-08-12T10:00:00|100|run.sbatch|offline\n'
 case "$(cat "$WORKSPACE_PHASE")" in
     pending)
-        printf '102|PENDING|auto-start|00:00|Resources|cpu|Unknown|100|auto.sbatch\n'
-        printf '103|PENDING|early-fail|00:00|Resources|cpu|Unknown|100|fail.sbatch\n'
-        printf '104|PENDING|vanishing|00:00|Resources|cpu|Unknown|100|gone.sbatch\n'
+        printf '102|PENDING|auto-start|00:00|Resources|cpu|Unknown|100|auto.sbatch|offline\n'
+        printf '103|PENDING|early-fail|00:00|Resources|cpu|Unknown|100|fail.sbatch|offline\n'
+        printf '104|PENDING|vanishing|00:00|Resources|cpu|Unknown|100|gone.sbatch|offline\n'
         : >"$WORKSPACE_MONITOR_SEEN"
         ;;
     running)
-        printf '102|RUNNING|auto-start|00:01|node|cpu|2026-08-12T10:01:00|100|auto.sbatch\n'
-        printf '103|FAILED|early-fail|00:00|launch failed|cpu|Unknown|100|fail.sbatch\n'
+        printf '102|RUNNING|auto-start|00:01|node|cpu|2026-08-12T10:01:00|100|auto.sbatch|offline\n'
+        printf '103|FAILED|early-fail|00:00|launch failed|cpu|Unknown|100|fail.sbatch|offline\n'
         ;;
 esac
 EOF
@@ -102,7 +106,7 @@ test "$(tmux_test show-options -v -t "$session" bell-action)" = any
 test "$(tmux_test show-options -v -t "$session" visual-bell)" = off
 test -z "$(tmux_test show-options -v -t "$session" status-left)"
 test -z "$(tmux_test show-options -v -t "$session" status-right)"
-test "$(tmux_test show-options -sv set-clipboard)" = on
+test "$(tmux_test show-options -sv set-clipboard)" = external
 style=$(tmux_test show-options -Av -t "$session" status-style)
 case "$style" in *fg=colour0*bg=colour2*|*bg=colour2*fg=colour0*) ;; *) exit 1 ;; esac
 format=$(tmux_test show-options -v -t "$session" window-status-current-format)

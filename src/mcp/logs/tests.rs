@@ -96,6 +96,11 @@ fn diagnosis_distinguishes_pending_missing_and_silent_logs() {
         ..LogData::default()
     };
     assert!(classes(&findings(None, None, &no_stdout, "")).contains(&"no_stdout"));
+    let missing = LogData {
+        status: "not_found".into(),
+        ..LogData::default()
+    };
+    assert!(classes(&findings(None, None, &missing, "")).contains(&"log_unavailable"));
     let silent = LogData {
         status: "available".into(),
         ..LogData::default()
@@ -108,4 +113,17 @@ fn diagnosis_distinguishes_pending_missing_and_silent_logs() {
             .unwrap()
             .contains("without assuming buffering")
     );
+}
+
+#[test]
+fn duplicate_findings_and_exception_output_are_bounded() {
+    let mut values = Vec::new();
+    push_finding(&mut values, "same", "high", &["first"], "check");
+    push_finding(&mut values, "same", "low", &["second"], "ignored");
+    assert_eq!(values.len(), 1);
+
+    let lines = std::iter::once("Traceback (most recent call last):")
+        .chain(std::iter::repeat_n("frame", 2_100))
+        .collect::<Vec<_>>();
+    assert_eq!(exception_blocks(&lines).lines().count(), 80);
 }

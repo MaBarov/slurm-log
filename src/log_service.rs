@@ -2,7 +2,7 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
-    path::Path,
+    path::{Component, Path},
 };
 
 use anyhow::{Context, Result, bail};
@@ -49,14 +49,20 @@ impl LogData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct ResolvedLog {
     cluster: String,
     id: String,
     name: String,
     state: String,
     terminal: bool,
-    path: String,
+    source: LogSource,
+}
+
+#[derive(Debug)]
+enum LogSource {
+    Local(File),
+    Remote(String),
 }
 
 pub fn metadata(config: &Config, cluster: &str, id: &str) -> Result<LogData> {
@@ -96,10 +102,11 @@ fn read(config: &Config, cluster: &str, id: &str, mode: ReadMode) -> Result<LogD
         Err(value) => return Ok(value),
     };
     let target = config.cluster(cluster)?;
-    let result = if target.remote() {
-        remote_read(&target.ssh_host, &resolved.path, &mode)
-    } else {
-        local_read(Path::new(&resolved.path), &mode)
+    let result = match &resolved.source {
+        LogSource::Remote(path) => {
+            remote_read(&target.ssh_host, &target.working_directory, path, &mode)
+        }
+        LogSource::Local(file) => local_read(file, &mode),
     };
     let (identity, size, modified, offset, bytes) = match result {
         Ok(value) => value,
@@ -133,35 +140,48 @@ fn resolve(config: &Config, cluster: &str, id: &str) -> Result<Result<ResolvedLo
     if !crate::model::valid_job_id(id) {
         bail!("invalid job ID {id}");
     }
-    let queued = slurm::queued(config, cluster);
-    let queue_known = queued.is_ok();
-    let active = queued
-        .unwrap_or_default()
-        .into_iter()
-        .find(|job| job.id == id);
-    let terminal = queue_known && active.as_ref().is_none_or(|job| !job.active());
-    match slurm::terminal_path(config, cluster, id) {
-        Ok((Some(path), name)) => Ok(Ok(ResolvedLog {
-            cluster: cluster.into(),
-            id: id.into(),
-            name: active.as_ref().map_or(name, |job| job.name.clone()),
-            state: active
-                .as_ref()
-                .map(|job| job.state.clone())
-                .unwrap_or_default(),
-            terminal,
-            path,
-        })),
+    // Do not use the 15-second queue cache for any authorization decision.
+    // This fresh result is immediately bound to the metadata request below.
+    let authorized = slurm::authorize_exact_job(config, cluster, id)?;
+    let terminal = !authorized.active();
+    match slurm::terminal_path_authorized(config, cluster, id, &authorized) {
+        Ok((Some(path), name)) => match confined_log_source(config, cluster, &path) {
+            Ok(source) => Ok(Ok(ResolvedLog {
+                cluster: cluster.into(),
+                id: id.into(),
+                name: if authorized.name.is_empty() {
+                    name
+                } else {
+                    authorized.name.clone()
+                },
+                state: authorized.state.clone(),
+                terminal,
+                source,
+            })),
+            Err(error) => {
+                let status = if authorized.active() && crate::secure_open::is_missing(&error) {
+                    "pending_log"
+                } else {
+                    "no_stdout"
+                };
+                Ok(Err(LogData::unavailable(
+                    cluster,
+                    id,
+                    Some(&authorized),
+                    status,
+                )))
+            }
+        },
         Ok((None, _)) => Ok(Err(LogData::unavailable(
             cluster,
             id,
-            active.as_ref(),
+            Some(&authorized),
             "no_stdout",
         ))),
-        Err(_) if active.as_ref().is_some_and(Job::active) => Ok(Err(LogData::unavailable(
+        Err(_) if authorized.active() => Ok(Err(LogData::unavailable(
             cluster,
             id,
-            active.as_ref(),
+            Some(&authorized),
             "pending_log",
         ))),
         Err(_) if !target.accounting => Ok(Err(LogData::unavailable(
@@ -186,9 +206,16 @@ fn resolved_job(value: &ResolvedLog) -> Job {
 
 type ReadResult = (String, u64, i64, u64, Vec<u8>);
 
-fn local_read(path: &Path, mode: &ReadMode) -> Result<ReadResult> {
-    let mut file = File::open(path).with_context(|| format!("open job log {}", path.display()))?;
+fn local_read(opened: &File, mode: &ReadMode) -> Result<ReadResult> {
+    // `opened` was produced by secure_open with openat2 resolution beneath a
+    // pinned directory descriptor. Re-check the descriptor, not a pathname.
+    let mut file = opened
+        .try_clone()
+        .context("clone secured job log descriptor")?;
     let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        bail!("job log descriptor is not a single-link regular file");
+    }
     let size = metadata.len();
     let (offset, maximum) = read_bounds(size, mode);
     let mut bytes = Vec::with_capacity(maximum.min(size.saturating_sub(offset) as usize));
@@ -205,17 +232,25 @@ fn local_read(path: &Path, mode: &ReadMode) -> Result<ReadResult> {
     ))
 }
 
-fn remote_read(host: &str, path: &str, mode: &ReadMode) -> Result<ReadResult> {
-    let quoted = command::shell_quote(path);
+fn remote_read(host: &str, root: &Path, relative: &str, mode: &ReadMode) -> Result<ReadResult> {
+    let relative = command::shell_quote(relative);
+    let root = command::shell_quote(&root.display().to_string());
     let body = match mode {
         ReadMode::Metadata => String::new(),
-        ReadMode::Window(maximum) => format!("tail -c {maximum} -- {quoted}"),
+        ReadMode::Window(maximum) => format!("tail -c {maximum} -- /proc/self/fd/3"),
         ReadMode::Range(start, maximum) => {
             let first = start.saturating_add(1);
-            format!("tail -c +{first} -- {quoted} | head -c {maximum}")
+            format!("tail -c +{first} -- /proc/self/fd/3 | head -c {maximum}")
         }
     };
-    let script = format!("set -e; stat -Lc 'SLURMLOG|%d|%i|%s|%Y' -- {quoted}; {body}");
+    // The remote helper rejects a resolved symlink path, binds reads to fd 3,
+    // and then validates that opened descriptor again. A parent swap cannot
+    // redirect `tail` outside the configured root; `%h == 1` rejects hard
+    // links. Unlike local openat2 this remains a bounded shell equivalent,
+    // so the descriptor revalidation is the final authority.
+    let script = format!(
+        "set -efu; root=$(readlink -f -- {root}); path=\"$root\"/{relative}; resolved=$(readlink -f -- \"$path\"); [ \"$resolved\" = \"$path\" ] || exit 2; exec 3<\"$path\"; opened=$(readlink -f -- /proc/self/fd/3); [ \"$opened\" = \"$path\" ] || exit 2; metadata=$(stat -Lc 'SLURMLOG|%h|%F|%d|%i|%s|%Y' -- /proc/self/fd/3); case \"$metadata\" in 'SLURMLOG|1|regular file|'*) ;; *) exit 2;; esac; printf '%s\\n' \"$metadata\" | awk -F'|' '{{print $1 \"|\" $4 \"|\" $5 \"|\" $6 \"|\" $7}}'; {body}"
+    );
     let output = command::output(
         "ssh",
         &[
@@ -262,6 +297,33 @@ fn remote_read(host: &str, path: &str, mode: &ReadMode) -> Result<ReadResult> {
     ))
 }
 
+fn confined_log_source(config: &Config, cluster: &str, value: &str) -> Result<LogSource> {
+    let target = config.cluster(cluster)?;
+    let root = &target.working_directory;
+    let raw = Path::new(value);
+    if raw
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        bail!("job stdout path contains parent traversal");
+    }
+    let relative = if raw.is_absolute() {
+        raw.strip_prefix(root)
+            .map(Path::to_path_buf)
+            .context("job stdout path is outside the configured working directory")?
+    } else {
+        raw.to_path_buf()
+    };
+    if target.remote() {
+        return relative
+            .to_str()
+            .map(str::to_string)
+            .map(LogSource::Remote)
+            .context("job stdout path is not valid UTF-8");
+    }
+    crate::secure_open::open_regular_file_beneath(root, &relative).map(LogSource::Local)
+}
+
 fn read_bounds(size: u64, mode: &ReadMode) -> (u64, usize) {
     match mode {
         ReadMode::Metadata => (size, 0),
@@ -286,37 +348,5 @@ fn generation(cluster: &str, id: &str, identity: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bounds_are_bounded_and_range_starts_are_clamped() {
-        assert_eq!(read_bounds(100, &ReadMode::Metadata), (100, 0));
-        assert_eq!(read_bounds(100, &ReadMode::Window(20)), (80, 20));
-        assert_eq!(read_bounds(10, &ReadMode::Window(20)), (0, 20));
-        assert_eq!(read_bounds(10, &ReadMode::Range(99, 4)), (10, 4));
-    }
-
-    #[test]
-    fn generation_is_stable_but_cluster_and_inode_scoped() {
-        let value = generation("one", "123", "1:2");
-        assert_eq!(value.len(), 64);
-        assert_eq!(value, generation("one", "123", "1:2"));
-        assert_ne!(value, generation("two", "123", "1:2"));
-        assert_ne!(value, generation("one", "123", "1:3"));
-    }
-
-    #[test]
-    fn local_reads_cover_metadata_tail_ranges_and_missing_files() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("job.log");
-        std::fs::write(&path, b"0123456789").unwrap();
-        let metadata = local_read(&path, &ReadMode::Metadata).unwrap();
-        assert_eq!((metadata.1, metadata.3, metadata.4), (10, 10, Vec::new()));
-        let window = local_read(&path, &ReadMode::Window(4)).unwrap();
-        assert_eq!((window.3, window.4), (6, b"6789".to_vec()));
-        let range = local_read(&path, &ReadMode::Range(2, 3)).unwrap();
-        assert_eq!((range.3, range.4), (2, b"234".to_vec()));
-        assert!(local_read(&directory.path().join("missing"), &ReadMode::Metadata).is_err());
-    }
-}
+#[path = "log_service/tests.rs"]
+mod tests;

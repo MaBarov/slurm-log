@@ -13,6 +13,7 @@ fn direct_aggregation_uses_complete_archive_caches_and_filters_canonically() {
         sbatch_banks: Vec::new(),
         clusters: vec![crate::config::ClusterConfig {
             name: "local".into(),
+            controller: None,
             transport: "local".into(),
             user: "offline".into(),
             ssh_host: String::new(),

@@ -29,16 +29,34 @@ cat >"$test_root/bin/scancel" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >"$BANK_CALLS/local-cancel"
 EOF
+cat >"$test_root/bin/squeue" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *' -j 12345 '*) printf '12345|RUNNING|offline-train|00:01|node|cpu|now|1|train.sbatch|offline\n' ;;
+  *' -j 12346 '*) printf '12346|RUNNING|offline-train|00:01|node|cpu|now|1|train.sbatch|offline\n' ;;
+  *) exit 71 ;;
+esac
+EOF
+cat >"$test_root/bin/scontrol" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *' show job -o 12345 '*) printf 'JobId=12345 UserId=offline(1000) JobName=offline-train JobState=RUNNING\n' ;;
+  *' show job -o 12346 '*) printf 'JobId=12346 UserId=offline(1000) JobName=offline-train JobState=RUNNING\n' ;;
+  *) exit 72 ;;
+esac
+EOF
 cat >"$test_root/bin/ssh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$BANK_CALLS/ssh-args"
 case "$*" in
   *'sbatch --parsable'*) cat >"$BANK_CALLS/remote-input"; printf '54321;remote\n' ;;
+  *'squeue '*) printf '54321|RUNNING|offline-train|00:01|node|cpu|now|1|train.sbatch|offline\n' ;;
+  *'scontrol '*) printf 'JobId=54321 UserId=offline(1000) JobName=offline-train JobState=RUNNING\n' ;;
   *scancel*) : ;;
   *) exit 71 ;;
 esac
 EOF
-chmod 755 "$test_root/bin/sbatch" "$test_root/bin/scancel" "$test_root/bin/ssh"
+chmod 755 "$test_root/bin/sbatch" "$test_root/bin/scancel" "$test_root/bin/squeue" "$test_root/bin/scontrol" "$test_root/bin/ssh"
 cat >"$test_root/config.json" <<EOF
 {
   "clusters": [

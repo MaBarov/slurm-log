@@ -1,46 +1,115 @@
 pub fn terminal_path(config: &Config, cluster: &str, id: &str) -> Result<(Option<String>, String)> {
-    if !valid_job_id(id) {
-        bail!("invalid job ID {id}");
+    let authorized = authorize_exact_job(config, cluster, id)?;
+    terminal_path_authorized(config, cluster, id, &authorized)
+}
+
+/// Resolve terminal metadata immediately after a fresh owner authorization.
+/// Callers that already performed that fresh check use this to avoid a second
+/// scheduler round trip while retaining validation of every returned field.
+pub(crate) fn terminal_path_authorized(
+    config: &Config,
+    cluster: &str,
+    id: &str,
+    authorized: &Job,
+) -> Result<(Option<String>, String)> {
+    if !valid_job_id(id) || authorized.cluster != cluster || authorized.id != id {
+        bail!("invalid or mismatched authorized job {cluster}:{id}");
     }
-    let metadata = if let Ok(value) =
-        scheduler_text(config, cluster, "scontrol", &["show", "job", id])
-    {
-        active_terminal_metadata(id, &value)
+    let metadata = if let Ok(value) = control_job_text(config, cluster, id) {
+        active_terminal_metadata(config, cluster, id, &value)?
     } else {
-        if !config.cluster(cluster)?.accounting {
+        let target = config.cluster(cluster)?;
+        let cluster_option = accounting_cluster_option(config, cluster)?;
+        if !target.accounting {
             bail!("job {cluster}:{id} is no longer active and accounting is unavailable");
         }
         let command = format!(
-            "sacct -X -j {} --format=JobIDRaw,JobID,JobName,StdOut -n -P 2>/dev/null | awk 'NF {{print; exit}}'",
-            shell_quote(id)
+            "sacct -X{cluster_option} -j {} -u {} --format=JobIDRaw,JobID,User,JobName,StdOut,Cluster -n -P 2>/dev/null | awk 'NF {{print; exit}}'",
+            shell_quote(id),
+            shell_quote(&target.user),
         );
         let value = scheduler_text(config, cluster, "sh", &["-c", &command])?;
-        accounting_terminal_metadata(&value)
-            .ok_or_else(|| anyhow::anyhow!("no stdout for {cluster} job {id}"))?
+        accounting_terminal_metadata(config, cluster, id, &value)?
     };
-    Ok(resolve_terminal_metadata(metadata))
+    let (path, name) = resolve_terminal_metadata(metadata);
+    Ok((path, terminal_text(&name)))
 }
 
 type TerminalMetadata = (String, String, String, String);
 
-fn active_terminal_metadata(id: &str, value: &str) -> TerminalMetadata {
+fn active_terminal_metadata(
+    config: &Config,
+    cluster: &str,
+    id: &str,
+    value: &str,
+) -> Result<TerminalMetadata> {
+    validate_control_identity(config, cluster, id, value)?;
     let name = token(value, "JobName=").unwrap_or("job").to_string();
     let path = usable_stdout(token(value, "StdOut="))
         .unwrap_or_default()
         .to_string();
-    (id.to_string(), id.to_string(), name, path)
+    Ok((id.to_string(), id.to_string(), name, path))
 }
 
-fn accounting_terminal_metadata(value: &str) -> Option<TerminalMetadata> {
-    let fields: Vec<_> = value.trim().splitn(4, '|').collect();
-    (fields.len() == 4).then(|| {
-        (
-            fields[0].into(),
-            fields[1].into(),
-            fields[2].into(),
-            fields[3].into(),
-        )
-    })
+fn accounting_terminal_metadata(
+    config: &Config,
+    cluster: &str,
+    id: &str,
+    value: &str,
+) -> Result<TerminalMetadata> {
+    let fields: Vec<_> = value.trim().splitn(6, '|').collect();
+    if fields.len() != 6 {
+        bail!("no stdout metadata for {cluster} job {id}");
+    }
+    let target = config.cluster(cluster)?;
+    if !job_id_matches(fields[1], id)
+        || fields[2].trim() != target.user
+        || (target.binds_controller() && fields[5].trim() != target.controller())
+    {
+        bail!("accounting metadata identity does not match {cluster}:{id}");
+    }
+    Ok((
+        fields[0].into(),
+        fields[1].into(),
+        fields[3].into(),
+        fields[4].into(),
+    ))
+}
+
+/// Verify that `scontrol` did not return metadata for a different user or
+/// job after a fresh authorization decision.  A configured cluster selects
+/// the controller; when scontrol includes a cluster token it must agree too.
+pub(crate) fn validate_control_identity(
+    config: &Config,
+    cluster: &str,
+    id: &str,
+    value: &str,
+) -> Result<()> {
+    let target = config.cluster(cluster)?;
+    let returned_id = token(value, "JobId=")
+        .or_else(|| token(value, "JobID="))
+        .context("scontrol response omitted JobId")?;
+    if !job_id_matches(returned_id, id) {
+        bail!("scontrol response job ID does not match {cluster}:{id}");
+    }
+    let owner = token(value, "UserId=")
+        .or_else(|| token(value, "UserID="))
+        .map(|value| value.split('(').next().unwrap_or(value))
+        .context("scontrol response omitted UserId")?;
+    if owner != target.user {
+        bail!("scontrol response owner does not match configured user");
+    }
+    if target.binds_controller()
+        && let Some(returned_cluster) = token(value, "ClusterName=").or_else(|| token(value, "Cluster="))
+        && returned_cluster != target.controller()
+    {
+        bail!("scontrol response cluster does not match configured cluster");
+    }
+    Ok(())
+}
+
+pub(crate) fn job_id_matches(returned: &str, wanted: &str) -> bool {
+    returned.split('.').next().unwrap_or(returned) == wanted
 }
 
 fn resolve_terminal_metadata(metadata: TerminalMetadata) -> (Option<String>, String) {
@@ -79,9 +148,11 @@ pub fn final_details(config: &Config, job: &Job) -> Job {
     if config
         .cluster(&job.cluster)
         .is_ok_and(|cluster| cluster.accounting)
+        && let Ok(controller) = controller_option(config, &job.cluster)
     {
         let command = format!(
-            "sacct -X -j {} -n -P --format=JobID,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition 2>/dev/null | awk 'NF {{print; exit}}'",
+            "sacct {} -X -j {} -n -P --format=JobID,State,JobName,Elapsed,End,ExitCode,MaxRSS,AllocTRES,Partition 2>/dev/null | awk 'NF {{print; exit}}'",
+            controller,
             shell_quote(&job.id)
         );
         if let Ok(value) = scheduler_text(config, &job.cluster, "sh", &["-c", &command])
@@ -91,7 +162,9 @@ pub fn final_details(config: &Config, job: &Job) -> Job {
         }
     }
     let mut details = job.clone();
-    if let Ok(value) = scheduler_text(config, &job.cluster, "scontrol", &["show", "job", &job.id]) {
+    if let Ok(value) = control_job_text(config, &job.cluster, &job.id)
+        && validate_control_identity(config, &job.cluster, &job.id, &value).is_ok()
+    {
         apply_control_details(&mut details, &value);
     }
     details

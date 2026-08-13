@@ -12,6 +12,7 @@ fn test_config(banks: Vec<SbatchBankConfig>) -> Config {
         sbatch_banks: banks,
         clusters: vec![ClusterConfig {
             name: "local".into(),
+            controller: None,
             transport: "local".into(),
             user: "alice".into(),
             ssh_host: String::new(),
@@ -27,6 +28,33 @@ fn extracts_job_names() {
         Some("train".into())
     );
     assert_eq!(directive_job_name(&["-J eval".into()]), Some("eval".into()));
+    assert_eq!(
+        directive_job_name(&["--job-name eval".into()]),
+        Some("eval".into())
+    );
+}
+
+#[test]
+fn scanner_uses_only_the_effective_sbatch_preamble_and_rejects_controls() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("effective.sbatch"),
+        b"#!/bin/sh\n#SBATCH --job-name=effective\necho start\n#SBATCH --job-name=ignored\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("unsafe.sbatch"),
+        b"#!/bin/sh\n#SBATCH --job-name=bad\x1b]52;c;clipboard\x07\n",
+    )
+    .unwrap();
+    let (scripts, warnings) = scan(root.path()).unwrap();
+    assert_eq!(scripts.len(), 1);
+    assert_eq!(scripts[0].name, "effective");
+    assert_eq!(scripts[0].directives, ["--job-name=effective"]);
+    assert_eq!(
+        warnings,
+        ["ignored script with terminal control characters"]
+    );
 }
 
 #[test]
@@ -137,6 +165,7 @@ fn script_origin_uses_cluster_prefixes_and_keeps_ambiguous_files_shared() {
     config.clusters[0].name = "sprint".into();
     config.clusters.push(ClusterConfig {
         name: "cispa".into(),
+        controller: None,
         transport: "ssh".into(),
         user: "alice".into(),
         ssh_host: "cispa.example".into(),
@@ -191,6 +220,7 @@ fn selected_submission_target_is_obvious_in_cluster_tabs() {
     let mut config = test_config(Vec::new());
     config.clusters.push(ClusterConfig {
         name: "remote".into(),
+        controller: None,
         transport: "ssh".into(),
         user: "alice".into(),
         ssh_host: "remote".into(),
