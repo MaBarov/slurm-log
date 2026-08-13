@@ -111,7 +111,7 @@ chmod 755 "$fake_bin"/*
 cat >"$config" <<EOF
 {
   "clusters": [
-    {"name":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root","accounting":true},
+    {"name":"alpha","controller":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root","accounting":true},
     {"name":"broken","transport":"ssh","user":"offline","sshHost":"broken.invalid","workingDirectory":"/offline","accounting":true}
   ],
   "sbatchBanks": [{"path":"$test_root/bank","name":"Fixtures"}],

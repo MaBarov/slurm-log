@@ -149,7 +149,7 @@ chmod 755 "$fake_bin/squeue" "$fake_bin/scontrol" "$fake_bin/sstat" \
 cat >"$test_root/config.json" <<EOF
 {
   "clusters": [
-    {"name":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root/work","accounting":false},
+    {"name":"alpha","controller":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root/work","accounting":false},
     {"name":"beta","transport":"ssh","user":"offline","sshHost":"fake-cluster","workingDirectory":"$test_root/work","accounting":false}
   ],
   "sbatchBanks": [{"path":"$test_root/bank","name":"Bank"}],
@@ -250,7 +250,7 @@ EOF
 cat >"$test_root/config.next.json" <<EOF
 {
   "clusters": [
-    {"name":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root/work","accounting":false},
+    {"name":"alpha","controller":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root/work","accounting":false},
     {"name":"beta","transport":"ssh","user":"offline","sshHost":"fake-cluster","workingDirectory":"$test_root/work","accounting":false}
   ],
   "sbatchBanks": [

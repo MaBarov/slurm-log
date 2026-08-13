@@ -204,7 +204,8 @@ grep -F alpha-shell "$test_root/blocked" >/dev/null
 "$binary" archive --cluster all >"$test_root/archive"
 grep -F alpha-complete "$test_root/archive" >/dev/null
 grep -F beta-complete "$test_root/archive" >/dev/null
-grep -F 'sacct --clusters alpha -X -S' "$calls" | grep -F -- '-u offline-alpha' >/dev/null
+grep -F 'sacct -X -S' "$calls" | grep -F -- '-u offline-alpha' >/dev/null
+! grep -F -- 'sacct --clusters alpha' "$calls" >/dev/null
 
 # JSON, state read/unread, and explicit active-monitor suppression.
 "$binary" json --cluster all >"$test_root/jobs.json"
@@ -235,7 +236,8 @@ grep -F 'eval.sbatch' "$test_root/environment-bank" >/dev/null
 "$binary" submit Fixtures/train.sbatch --cluster alpha | grep -F 'alpha:777' >/dev/null
 cmp "$test_root/bank/train.sbatch" "$test_root/submitted-input"
 "$binary" cancel 101 103 --cluster alpha | grep -F '2 job(s)' >/dev/null
-grep -F 'scancel --clusters alpha 101 103' "$calls" >/dev/null
+grep -F 'scancel 101 103' "$calls" >/dev/null
+! grep -F 'scancel --clusters alpha' "$calls" >/dev/null
 CLI_SCANCEL_FAIL=1 expect_fail cancel 101 --cluster alpha
 expect_fail submit missing.sbatch --cluster alpha
 
@@ -250,7 +252,8 @@ grep -F 'tmux new-session' "$calls" >/dev/null
 grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--pane-follow --lines 7' | grep -F -- '--show-log-warnings alpha 101' >/dev/null
 : >"$calls"
 "$binary" 101 --lines 9
-grep -F 'scontrol --cluster alpha show job -o 101' "$calls" >/dev/null
+grep -F 'scontrol show job -o 101' "$calls" >/dev/null
+! grep -F 'scontrol --cluster alpha' "$calls" >/dev/null
 grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--lines 9' >/dev/null
 expect_fail 99999999
 : >"$calls"

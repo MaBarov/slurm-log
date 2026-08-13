@@ -50,11 +50,14 @@ impl ClusterConfig {
         self.controller.as_deref().unwrap_or(&self.name)
     }
 
-    /// Whether this target can be passed explicitly to Slurm commands.  The
-    /// historical implicit `local` target remains usable for old local-only
-    /// configurations; remote targets always bind explicitly.
+    /// Whether this target can be passed explicitly to Slurm commands.
+    ///
+    /// `name` is a display label, so a local target needs an explicit
+    /// controller before it can be passed to Slurm. Remote targets still bind
+    /// explicitly: when their controller is absent, the legacy name fallback
+    /// remains their controller identity.
     pub fn binds_controller(&self) -> bool {
-        self.remote() || self.controller.is_some() || self.name != "local"
+        self.remote() || self.controller.is_some()
     }
 }
 

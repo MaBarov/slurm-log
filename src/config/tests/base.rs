@@ -104,6 +104,29 @@ fn fresh_configuration_has_one_neutral_local_cluster() {
 }
 
 #[test]
+fn only_explicit_local_controllers_are_bound_to_scheduler_commands() {
+    let local = config();
+    assert_eq!(local.clusters[0].name, "sprint");
+    assert!(!local.clusters[0].binds_controller());
+
+    let mut explicit = local.clusters[0].clone();
+    explicit.controller = Some("federated-sprint".into());
+    assert!(explicit.binds_controller());
+
+    let remote = ClusterConfig {
+        name: "cispa".into(),
+        controller: None,
+        transport: "ssh".into(),
+        user: "alice".into(),
+        ssh_host: "cispa".into(),
+        working_directory: PathBuf::from("/tmp"),
+        accounting: true,
+    };
+    assert!(remote.binds_controller());
+    assert_eq!(remote.controller(), "cispa");
+}
+
+#[test]
 fn accepts_new_and_legacy_bank_shapes() {
     let modern: FileConfig =
         serde_json::from_str(r#"{"sbatchBanks":[{"path":"/a","name":"A"},{"path":"/b"}]}"#)
