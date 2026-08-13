@@ -1,6 +1,6 @@
 [package]
 name = "slurm-log"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 description = "Fast, owner-filtered Slurm log browser"
 license = "MIT"

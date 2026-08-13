@@ -32,7 +32,7 @@ detached manifest signature before downloading the archive, then checks the
 signed size and digest before extraction or starting the candidate binary. Do
 not obtain the PEM from the same release URL, archive, or mutable mirror being
 verified. The script does not require Rust. To pin a release, use
-`sh install.sh --version v0.2.5 --release-public-key /secure/path/key.pem`.
+`sh install.sh --version v0.2.6 --release-public-key /secure/path/key.pem`.
 
 Alternatively, extract a shared release archive and run:
 
@@ -194,10 +194,12 @@ manual fields.
 
 `name` is the local display label. `controller` is the Slurm controller
 identity used to bind remote scheduler queries, submissions, and cancellations;
-it may differ from the label. Existing configurations without `controller`
-remain valid and use `name` as their controller identity. Remote submission
-requires `sbatch --parsable` to return that same controller identity, and a
-script whose `#SBATCH --clusters`/`-M` directive names another controller is
+it may differ from the label. Scheduler commands receive a `--clusters`
+argument only when `controller` is set: existing configurations without
+`controller` keep the label's previous behaviour and never fabricate a
+cluster selector. When `controller` is configured, remote submission requires
+`sbatch --parsable` to return that same controller identity, and a script
+whose `#SBATCH --clusters`/`-M` directive names another controller is
 rejected before preview or submission.
 
 Bank discovery proposes local per-user roots that actually exist, including

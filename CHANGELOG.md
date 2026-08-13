@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6
+
+- Construct a `--clusters` scheduler argument only when a cluster configures
+  an explicit controller, restoring remote single-cluster behaviour: a remote
+  scheduler no longer receives a fabricated `--clusters <label>` that it
+  rejects as an unknown cluster.
+- Validate returned submission controllers only when one is configured, and
+  let routing directives stand when no controller identity is declared.
+
 ## 0.2.5
 
 - Treat local cluster names as display labels unless an explicit controller is
