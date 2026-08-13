@@ -211,4 +211,4 @@ jobs:
           dist/slurm-log-linux-x86_64.tar.gz.sha256
           dist/slurm-log-linux-x86_64.tar.gz.manifest
           dist/slurm-log-linux-x86_64.tar.gz.manifest.sig
-          --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

@@ -41,6 +41,7 @@ printf '%s\n' "$publish_block" | grep -F 'name: release-signed' >/dev/null
 printf '%s\n' "$publish_block" | grep -F 'SLURM_LOG_RELEASE_PUBLIC_KEY_PEM' >/dev/null
 printf '%s\n' "$publish_block" | grep -F 'openssl pkeyutl -verify' >/dev/null
 printf '%s\n' "$publish_block" | grep -F '.manifest.sig' >/dev/null
+printf '%s\n' "$publish_block" | grep -F -- '--repo "$GITHUB_REPOSITORY"' >/dev/null
 
 # A production public key is an immutable reviewed source input. The explicit
 # test-only compile flag is the sole fixture escape hatch.
