@@ -134,7 +134,7 @@ fn handle_stream_with_logs(
                     })
                 };
                 if let Some(snapshot) = throttled {
-                    write_filtered_reply(stream, &snapshot, &cluster, &filter)?;
+                    write_filtered_reply(config, stream, &snapshot, &cluster, &filter)?;
                     return Ok(false);
                 }
             }
@@ -150,7 +150,7 @@ fn handle_stream_with_logs(
                     // A stale snapshot is deliberately returned immediately.
                     // The refresh loop updates it in the background, so opening
                     // another picker never waits for SSH or scheduler RPCs.
-                    write_filtered_reply(stream, &snapshot, &cluster, &filter)?;
+                    write_filtered_reply(config, stream, &snapshot, &cluster, &filter)?;
                     return Ok(false);
                 }
             }
@@ -174,7 +174,7 @@ fn handle_stream_with_logs(
                     ..empty_reply()
                 },
             };
-            write_filtered_reply(stream, &canonical, &cluster, &filter)?;
+            write_filtered_reply(config, stream, &canonical, &cluster, &filter)?;
             let now = Instant::now();
             let mut entries = cache.lock().unwrap_or_else(|error| error.into_inner());
             entries.insert(

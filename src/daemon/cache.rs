@@ -57,7 +57,17 @@ struct BorrowedReply<'a> {
     details: &'a Option<JobDetails>,
 }
 
+#[cfg(test)]
 fn encode_filtered_reply(reply: &Reply, cluster: &str, filter: &str) -> Result<Vec<u8>> {
+    encode_filtered_reply_with_ledger(reply, &reply.ledger, cluster, filter)
+}
+
+fn encode_filtered_reply_with_ledger(
+    reply: &Reply,
+    ledger: &Ledger,
+    cluster: &str,
+    filter: &str,
+) -> Result<Vec<u8>> {
     let jobs = reply
         .jobs
         .iter()
@@ -65,7 +75,7 @@ fn encode_filtered_reply(reply: &Reply, cluster: &str, filter: &str) -> Result<V
         .collect();
     encode_frame(&BorrowedReply {
         jobs,
-        ledger: &reply.ledger,
+        ledger,
         warnings: &reply.warnings,
         error: &reply.error,
         details: &reply.details,
@@ -73,12 +83,19 @@ fn encode_filtered_reply(reply: &Reply, cluster: &str, filter: &str) -> Result<V
 }
 
 fn write_filtered_reply(
+    config: &Config,
     stream: &mut UnixStream,
     reply: &Reply,
     cluster: &str,
     filter: &str,
 ) -> Result<()> {
-    stream.write_all(&encode_filtered_reply(reply, cluster, filter)?)?;
+    // Scheduler snapshots are cached, but the ledger is mutable user state.
+    // Reload it for every reply so a completed-job dismissal cannot be undone
+    // by the next stale-while-refresh daemon response.
+    let ledger = Ledger::load(&config.state_path)?;
+    stream.write_all(&encode_filtered_reply_with_ledger(
+        reply, &ledger, cluster, filter,
+    )?)?;
     Ok(())
 }
 

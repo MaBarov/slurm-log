@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Keep completed jobs dismissed on the first attempt by reloading the current
+  private state ledger for daemon replies instead of replaying cached state.
+
 ## 0.2.0
 
 - Add the client-neutral `slurm-log mcp` stdio server with structured tools,

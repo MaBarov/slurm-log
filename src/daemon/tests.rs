@@ -96,11 +96,14 @@ fn oversized_and_truncated_frames_are_rejected_without_allocation() {
 fn cached_query_is_served_without_scheduler_access() {
     let directory = tempfile::tempdir().unwrap();
     let config = config(directory.path().join("state.json"));
+    let job = Job {
+        cluster: "cispa".into(),
+        id: "cached".into(),
+        state: "COMPLETED".into(),
+        ..Job::default()
+    };
     let reply = Reply {
-        jobs: vec![Job {
-            id: "cached".into(),
-            ..Job::default()
-        }],
+        jobs: vec![job.clone()],
         ..empty_reply()
     };
     let now = Instant::now();
@@ -125,10 +128,21 @@ fn cached_query_is_served_without_scheduler_access() {
         },
     )
     .unwrap();
+    Ledger::dismiss(&config.state_path, &[job]).unwrap();
     let details = Arc::new(Mutex::new(HashMap::new()));
     assert!(!handle_stream(&config, &cache, &details, &mut server).unwrap());
     let received: Reply = read_frame(&mut client).unwrap();
     assert_eq!(received.jobs[0].id, "cached");
+    assert!(received.ledger.dismissed.contains_key("cispa:cached"));
+    assert!(
+        crate::slurm::visible_jobs(
+            received.jobs,
+            &received.ledger,
+            crate::slurm::HistoryMode::Live,
+            false,
+        )
+        .is_empty()
+    );
 }
 
 #[test]
