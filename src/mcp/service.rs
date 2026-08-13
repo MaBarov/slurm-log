@@ -8,7 +8,7 @@ use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, JsonObjec
 use serde_json::{Value, json};
 
 use super::{McpServer, audit, helpers::*};
-use crate::{bank, slurm};
+use crate::{bank, config::Config, slurm};
 
 const PREVIEW_TTL: Duration = Duration::from_secs(5 * 60);
 
@@ -43,10 +43,17 @@ impl McpServer {
         });
         match result {
             Ok(value) => {
+                let fallback = if name == "slurm_list_scripts" {
+                    format!(
+                        "{name} completed: {} matching script(s), {} warning(s); structured result attached.",
+                        value["total"].as_u64().unwrap_or(0),
+                        value["warnings"].as_array().map_or(0, Vec::len)
+                    )
+                } else {
+                    format!("{name} completed; structured result attached.")
+                };
                 let mut result = CallToolResult::structured(value);
-                result.content = vec![ContentBlock::text(format!(
-                    "{name} completed; structured result attached."
-                ))];
+                result.content = vec![ContentBlock::text(fallback)];
                 result
             }
             Err(error) => {
@@ -187,7 +194,8 @@ impl McpServer {
     fn list_scripts(&self, args: &JsonObject) -> Result<Value> {
         let cluster = optional_string(args, "cluster").unwrap_or("all");
         self.config.selected_clusters(cluster)?;
-        let (mut scripts, warnings) = bank::configured_scripts(&self.config)?;
+        let config = self.current_bank_config()?;
+        let (mut scripts, warnings) = bank::configured_scripts(&config)?;
         scripts.retain(|script| cluster == "all" || bank::supports_cluster(script, cluster));
         if let Some(search) = optional_string(args, "search") {
             let needle = search.to_lowercase();
@@ -201,8 +209,7 @@ impl McpServer {
             .unwrap_or_default()
             .iter()
             .map(|script| {
-                let eligible = self
-                    .config
+                let eligible = config
                     .clusters
                     .iter()
                     .filter(|cluster| bank::supports_cluster(script, &cluster.name))
@@ -227,7 +234,8 @@ impl McpServer {
         self.config.cluster(cluster)?;
         let wanted = required_string(args, "script")?;
         let result = (|| {
-            let (scripts, warnings) = bank::configured_scripts_fresh(&self.config)?;
+            let config = self.current_bank_config()?;
+            let (scripts, warnings) = bank::configured_scripts_fresh(&config)?;
             let script = exact_script(&scripts, wanted, cluster)?;
             let digest = sha256(&script.bytes);
             let preview = Preview {
@@ -299,7 +307,8 @@ impl McpServer {
             if preview.created.elapsed() >= PREVIEW_TTL {
                 bail!("preview token expired");
             }
-            let (scripts, _) = bank::configured_scripts_fresh(&self.config)?;
+            let config = self.current_bank_config()?;
+            let (scripts, _) = bank::configured_scripts_fresh(&config)?;
             let script = exact_script(&scripts, &preview.script, &preview.cluster)?;
             let digest = sha256(&script.bytes);
             let working_directory = self
@@ -331,6 +340,14 @@ impl McpServer {
             status,
         );
         result
+    }
+
+    fn current_bank_config(&self) -> Result<Config> {
+        let current = Config::load_for_setup().context("reload sbatch bank configuration")?;
+        let mut config = self.config.as_ref().clone();
+        config.sbatch_banks = current.sbatch_banks;
+        config.validate()?;
+        Ok(config)
     }
 
     fn cancel_job(&self, args: &JsonObject, client: &str) -> Result<Value> {

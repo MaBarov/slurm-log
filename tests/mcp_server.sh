@@ -8,7 +8,7 @@ test_root=$(mktemp -d)
 case "$test_root" in /tmp/*) ;; *) exit 1 ;; esac
 fake_bin=$test_root/bin
 state_dir=$test_root/state
-mkdir -p "$fake_bin" "$state_dir" "$test_root/bank" "$test_root/work" "$test_root/clients"
+mkdir -p "$fake_bin" "$state_dir" "$test_root/bank/nested" "$test_root/work" "$test_root/clients"
 
 cleanup() {
     SLURM_LOG_CONFIG="$test_root/config.json" "$binary" daemon stop >/dev/null 2>&1 || true
@@ -138,8 +138,39 @@ grep -E 'squeue .* -u offline ' "$MCP_CALLS" >/dev/null
 request '{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"slurm_list_clusters","arguments":{}}}' | grep -F '"transport":"ssh"' >/dev/null
 request '{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"slurm_inspect_job","arguments":{"cluster":"alpha","job_id":"123"}}}' | grep -F '"dependencies":[]' >/dev/null
 request '{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"slurm_workspace_context","arguments":{}}}' | grep -F 'slurm-logs-alpha' >/dev/null
-request '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"slurm_list_scripts","arguments":{"cluster":"alpha","search":"train","limit":1}}}' | grep -F 'Bank/train.sbatch' >/dev/null
+script_result=$(request '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"slurm_list_scripts","arguments":{"cluster":"alpha","search":"train","limit":1}}}')
+printf '%s\n' "$script_result" | grep -F 'Bank/train.sbatch' >/dev/null
+printf '%s\n' "$script_result" | grep -F '1 matching script(s), 0 warning(s)' >/dev/null
 request '{"jsonrpc":"2.0","id":74,"method":"tools/call","params":{"name":"slurm_list_jobs","arguments":{"cluster":"alpha","history":"all","states":["RUNNING"],"include_blocked":true,"search":"mcp","limit":1}}}' | grep -F 'mcp-train' >/dev/null
+
+# A connected MCP process discovers nested scripts and newly configured banks
+# without reconnecting, while its cluster schema remains the startup snapshot.
+cat >"$test_root/bank/nested/live-added.sbatch" <<'EOF'
+#!/bin/sh
+#SBATCH --job-name=live-added
+EOF
+request '{"jsonrpc":"2.0","id":75,"method":"tools/call","params":{"name":"slurm_list_scripts","arguments":{"cluster":"alpha","search":"live-added"}}}' | grep -F 'Bank/nested/live-added.sbatch' >/dev/null
+mkdir -p "$test_root/added-bank"
+cat >"$test_root/added-bank/config-added.sbatch" <<'EOF'
+#!/bin/sh
+#SBATCH --job-name=config-added
+EOF
+cat >"$test_root/config.next.json" <<EOF
+{
+  "clusters": [
+    {"name":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root/work","accounting":false},
+    {"name":"beta","transport":"ssh","user":"offline","sshHost":"fake-cluster","workingDirectory":"$test_root/work","accounting":false}
+  ],
+  "sbatchBanks": [
+    {"path":"$test_root/bank","name":"Bank"},
+    {"path":"$test_root/added-bank","name":"Added"}
+  ],
+  "statePath": "$state_dir/state.json"
+}
+EOF
+chmod 600 "$test_root/config.next.json"
+mv "$test_root/config.next.json" "$test_root/config.json"
+request '{"jsonrpc":"2.0","id":76,"method":"tools/call","params":{"name":"slurm_list_scripts","arguments":{"cluster":"alpha","search":"config-added"}}}' | grep -F 'Added/config-added.sbatch' >/dev/null
 
 # Resources/templates expose only concrete slurm-log URIs.
 request '{"jsonrpc":"2.0","id":9,"method":"resources/list","params":{}}' | grep -F 'slurm-log://jobs/alpha/123' >/dev/null

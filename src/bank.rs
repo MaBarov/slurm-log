@@ -3,7 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     hash::{DefaultHasher, Hash, Hasher},
     io::{self, BufReader, BufWriter, IsTerminal, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -32,7 +32,7 @@ const MAX_SCRIPT_BYTES: u64 = 4 * 1024 * 1024;
 const BANK_SCAN_TIME_LIMIT: Duration = Duration::from_secs(3);
 const BANK_CACHE_TTL: Duration = Duration::from_secs(30);
 const MAX_BANK_CACHE_BYTES: u64 = 64 * 1024 * 1024;
-const BANK_CACHE_SCHEMA: u8 = 1;
+const BANK_CACHE_SCHEMA: u8 = 2;
 
 fn ignored_directory(name: &str) -> bool {
     matches!(
@@ -156,6 +156,7 @@ struct ScanPayload {
 struct BankCache {
     schema: u8,
     root: PathBuf,
+    fingerprint: u64,
     payload: ScanPayload,
 }
 
@@ -163,6 +164,7 @@ struct BankCache {
 struct BankCacheRef<'a> {
     schema: u8,
     root: &'a Path,
+    fingerprint: u64,
     payload: &'a ScanPayload,
 }
 
@@ -176,6 +178,56 @@ fn bank_cache_path(config: &Config, root: &Path) -> PathBuf {
         .join(format!("bank-{:016x}.msgpack", hash.finish()))
 }
 
+fn bank_tree_fingerprint(root: &Path) -> Option<u64> {
+    let metadata = fs::symlink_metadata(root).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    let mut directories = vec![(root.to_path_buf(), PathBuf::new(), 0_usize)];
+    let mut scripts = 0_usize;
+    while let Some((directory, relative, depth)) = directories.pop() {
+        let mut entries: Vec<_> = fs::read_dir(&directory)
+            .ok()?
+            .collect::<io::Result<_>>()
+            .ok()?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries.into_iter().rev() {
+            let file_type = entry.file_type().ok()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            let child = relative.join(entry.file_name());
+            if file_type.is_dir() {
+                if depth < MAX_DEPTH && !ignored_directory(&entry.file_name().to_string_lossy()) {
+                    directories.push((path, child, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("sbatch")
+            {
+                continue;
+            }
+            let metadata = entry.metadata().ok()?;
+            child.hash(&mut hasher);
+            metadata.len().hash(&mut hasher);
+            metadata.dev().hash(&mut hasher);
+            metadata.ino().hash(&mut hasher);
+            metadata.mtime().hash(&mut hasher);
+            metadata.mtime_nsec().hash(&mut hasher);
+            metadata.ctime().hash(&mut hasher);
+            metadata.ctime_nsec().hash(&mut hasher);
+            scripts += 1;
+            if scripts > MAX_SCRIPTS {
+                return Some(hasher.finish());
+            }
+        }
+    }
+    Some(hasher.finish())
+}
+
 fn load_bank_cache(config: &Config, root: &Path) -> Option<ScanPayload> {
     let path = bank_cache_path(config, root);
     let metadata = fs::metadata(&path).ok()?;
@@ -184,21 +236,24 @@ fn load_bank_cache(config: &Config, root: &Path) -> Option<ScanPayload> {
             .duration_since(metadata.modified().ok()?)
             .ok()?
             > BANK_CACHE_TTL
-        || fs::metadata(root)
-            .and_then(|root| root.modified())
-            .is_ok_and(|modified| modified > metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH))
     {
         return None;
     }
     let reader = BufReader::with_capacity(256 * 1024, fs::File::open(path).ok()?);
     let cache: BankCache = rmp_serde::from_read(reader).ok()?;
-    (cache.schema == BANK_CACHE_SCHEMA && cache.root == root).then_some(cache.payload)
+    (cache.schema == BANK_CACHE_SCHEMA
+        && cache.root == root
+        && Some(cache.fingerprint) == bank_tree_fingerprint(root))
+    .then_some(cache.payload)
 }
 
 fn store_bank_cache(config: &Config, root: &Path, payload: &ScanPayload) {
     if payload.error.is_some() {
         return;
     }
+    let Some(fingerprint) = bank_tree_fingerprint(root) else {
+        return;
+    };
     let path = bank_cache_path(config, root);
     let Some(parent) = path.parent() else { return };
     if fs::create_dir_all(parent).is_err() {
@@ -218,6 +273,7 @@ fn store_bank_cache(config: &Config, root: &Path, payload: &ScanPayload) {
                 &BankCacheRef {
                     schema: BANK_CACHE_SCHEMA,
                     root,
+                    fingerprint,
                     payload,
                 },
             )

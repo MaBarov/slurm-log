@@ -29,7 +29,7 @@ sh install.sh
 The script downloads only the release binary from the archive, verifies its
 published SHA-256 checksum, installs it for the current Unix user, and starts
 personal setup. It does not require Rust. To pin a release, use
-`sh install.sh --version v0.2.2`.
+`sh install.sh --version v0.2.3`.
 
 Alternatively, extract a shared release archive and run:
 
@@ -106,8 +106,10 @@ slurm-log mcp
 
 `slurm-log mcp serve` is an explicit alias. The process writes only MCP
 JSON-RPC to stdout and exits cleanly at EOF; it never opens an HTTP port.
-Configuration is validated and snapshotted when the process starts, so reconnect
-the client after changing clusters or banks.
+Cluster configuration and tool schemas are validated and snapshotted when the
+process starts, so reconnect the client after changing clusters. Bank tools
+reload the validated bank-root list and automatically detect added, removed, or
+changed `.sbatch` files without reconnecting.
 
 For Codex and Claude Code, guided user-scoped setup shows the exact registration
 command before asking whether to run it, preserves existing registrations unless

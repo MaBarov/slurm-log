@@ -303,6 +303,42 @@ fn private_bank_cache_round_trips_without_changing_payload() {
 }
 
 #[test]
+fn bank_cache_invalidates_nested_additions_changes_and_removals() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("bank");
+    fs::create_dir_all(root.join("nested")).unwrap();
+    fs::write(root.join("run.sbatch"), b"#!/bin/sh\n").unwrap();
+    let mut config = test_config(Vec::new());
+    config.state_path = directory.path().join("state/state.json");
+    let cache_current = || {
+        let (scripts, warnings) = scan_direct(&root).unwrap();
+        store_bank_cache(
+            &config,
+            &root,
+            &ScanPayload {
+                name: "bank".into(),
+                scripts,
+                warnings,
+                error: None,
+            },
+        );
+        assert!(load_bank_cache(&config, &root).is_some());
+    };
+
+    cache_current();
+    fs::write(root.join("nested/added.sbatch"), b"#!/bin/sh\n").unwrap();
+    assert!(load_bank_cache(&config, &root).is_none());
+
+    cache_current();
+    fs::write(root.join("run.sbatch"), b"#!/bin/sh\ntrue\n").unwrap();
+    assert!(load_bank_cache(&config, &root).is_none());
+
+    cache_current();
+    fs::remove_file(root.join("nested/added.sbatch")).unwrap();
+    assert!(load_bank_cache(&config, &root).is_none());
+}
+
+#[test]
 #[ignore = "release-mode performance budget"]
 fn loads_twenty_thousand_cached_scripts_within_budget() {
     let directory = tempfile::tempdir().unwrap();

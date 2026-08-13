@@ -140,4 +140,5 @@ mcp.subscriptions	mcp_server.sh
 mcp.audit_private	mcp_server.sh
 mcp.setup_clients	mcp_server.sh
 mcp.shared_daemon_cache	mcp_server.sh
+mcp.live_bank_discovery	mcp_server.sh
 quality.source_file_limit	source_layout.sh

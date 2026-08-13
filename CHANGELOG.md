@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+- Make long-lived MCP connections discover newly configured sbatch banks and
+  added, removed, or changed scripts inside existing nested bank directories.
+- Include script and warning counts in the `slurm_list_scripts` text fallback.
+
 ## 0.2.2
 
 - Keep verbose picker warnings on one terminal row so they cannot auto-wrap

@@ -71,6 +71,7 @@ fn cache_rejects_error_payload_oversize_corruption_and_wrong_schema() {
     let wrong = BankCache {
         schema: BANK_CACHE_SCHEMA + 1,
         root: root.clone(),
+        fingerprint: 0,
         payload: ScanPayload {
             name: "bank".into(),
             scripts: Vec::new(),
