@@ -18,6 +18,7 @@ fn hostile_unknown_and_wrong_typed_arguments_are_rejected() {
     );
     assert!(tool_arguments("slurm_list_jobs", &object(json!({"limit":0}))).is_err());
     assert!(tool_arguments("slurm_list_jobs", &object(json!({"cluster":7}))).is_err());
+    assert!(tool_arguments("slurm_list_jobs", &object(json!({"bogus":1}))).is_err());
     assert!(tool_arguments("missing", &JsonObject::new()).is_err());
 }
 
@@ -210,6 +211,16 @@ fn every_tool_shape_and_bound_is_validated() {
             &object(json!({
                 "cluster":"a","job_id":"1","script":"Bank/x.sbatch",
                 "schedule_overrides":{"partition":"gpu","time":"01:00:00"}
+            }))
+        )
+        .is_ok()
+    );
+    assert!(
+        tool_arguments(
+            "slurm_preview_resubmit",
+            &object(json!({
+                "cluster":"a","job_id":"1","script":"Bank/x.sbatch",
+                "schedule_overrides":{"gres":"gpu:a100:2","dependency":"afterok:123"}
             }))
         )
         .is_ok()

@@ -36,10 +36,9 @@ pub fn record(
     result: &str,
 ) -> Result<()> {
     let path = audit_path(config);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-    }
+    let parent = path.parent().unwrap_or(Path::new(""));
+    fs::create_dir_all(parent)?;
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
     let lock_path = path.with_extension("jsonl.lock");
     reject_symlink(&lock_path)?;
     let lock = OpenOptions::new()
@@ -175,6 +174,40 @@ mod tests {
         );
         let text = fs::read_to_string(path).unwrap();
         assert!(!text.contains("client\nname"));
+    }
+
+    #[test]
+    fn audit_rotation_replaces_a_prior_backup() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = config(directory.path().join("state.json"));
+        let path = audit_path(&config);
+        let backup = path.with_extension("jsonl.1");
+        fs::write(&backup, b"stale backup").unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(MAX_AUDIT_BYTES).unwrap();
+        record(
+            &config,
+            "c",
+            "slurm_submit_job",
+            "alpha",
+            "Bank/train.sbatch",
+            None,
+            "ok",
+        )
+        .unwrap();
+        let rotated = fs::read(&backup).unwrap();
+        assert_eq!(rotated.len() as u64, MAX_AUDIT_BYTES);
+        assert!(!rotated.windows(12).any(|window| window == b"stale backup"));
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("slurm_submit_job")
+        );
     }
 
     #[test]

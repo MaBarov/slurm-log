@@ -8,9 +8,19 @@ const TRUSTED_COMMAND_DIRECTORIES: &[&str] = &["/usr/local/bin", "/usr/bin", "/b
 /// fake-command injection for the hermetic process suite.
 pub(super) fn trusted_program(program: &str) -> PathBuf {
     #[cfg(slurm_log_test_build)]
-    if let Some(found) = search(env::var_os("PATH"), program) {
-        return found;
+    {
+        match search(env::var_os("PATH"), program) {
+            Some(found) => found,
+            None => trusted_directory_program(program),
+        }
     }
+    #[cfg(not(slurm_log_test_build))]
+    {
+        trusted_directory_program(program)
+    }
+}
+
+fn trusted_directory_program(program: &str) -> PathBuf {
     search(
         Some(env::join_paths(TRUSTED_COMMAND_DIRECTORIES).expect("trusted command path")),
         program,

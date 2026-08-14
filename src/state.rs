@@ -223,9 +223,7 @@ impl Ledger {
 }
 
 fn update(path: &Path, mutate: impl FnOnce(&mut Ledger) -> bool) -> Result<Ledger> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    fs::create_dir_all(path.parent().unwrap_or(Path::new("")))?;
     let lock_path = path.with_extension("lock");
     let lock = OpenOptions::new()
         .create(true)

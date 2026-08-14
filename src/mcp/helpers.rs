@@ -144,9 +144,8 @@ pub(super) fn declared_results_for_job(
         let mut by_hash = scripts
             .iter()
             .filter(|script| eligible(script) && sha256(&script.bytes) == hash);
-        if let Some(script) = by_hash.next()
-            && by_hash.next().is_none()
-        {
+        let unique = by_hash.next().filter(|_| by_hash.next().is_none());
+        if let Some(script) = unique {
             return Ok(script.declared_results.clone());
         }
     }
@@ -245,7 +244,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::config::{ClusterConfig, Config};
+    use crate::config::{ClusterConfig, Config, SbatchBankConfig};
 
     fn object(value: Value) -> JsonObject {
         value.as_object().unwrap().clone()
@@ -347,6 +346,47 @@ mod tests {
         let first = preview_token().unwrap();
         assert_eq!(first.len(), 64);
         assert_ne!(first, preview_token().unwrap());
+    }
+
+    #[test]
+    fn declared_results_resolve_via_hash_then_fall_back_to_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let bank = directory.path().join("bank");
+        std::fs::create_dir(&bank).unwrap();
+        let bytes = b"#!/bin/sh\n#SBATCH --job-name=train\n#SLURM_LOG-RESULT:model.pth\n";
+        std::fs::write(bank.join("train.sbatch"), bytes).unwrap();
+        let mut config = config();
+        config.state_path = directory.path().join("state.json");
+        config.sbatch_banks = vec![SbatchBankConfig {
+            path: bank,
+            name: Some("Bank".into()),
+        }];
+
+        let digest = sha256(bytes);
+        crate::state::Ledger::mark_submitted(&config.state_path, "alpha", "42", &digest).unwrap();
+        let matched = crate::model::Job {
+            cluster: "alpha".into(),
+            id: "42".into(),
+            name: "train".into(),
+            ..crate::model::Job::default()
+        };
+        assert_eq!(
+            declared_results_for_job(&config, "alpha", &matched).unwrap(),
+            ["model.pth"]
+        );
+
+        crate::state::Ledger::mark_submitted(&config.state_path, "alpha", "43", &"0".repeat(64))
+            .unwrap();
+        let by_name = crate::model::Job {
+            cluster: "alpha".into(),
+            id: "43".into(),
+            name: "train".into(),
+            ..crate::model::Job::default()
+        };
+        assert_eq!(
+            declared_results_for_job(&config, "alpha", &by_name).unwrap(),
+            ["model.pth"]
+        );
     }
 
     #[test]

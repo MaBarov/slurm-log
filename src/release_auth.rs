@@ -84,7 +84,10 @@ impl ReleaseManifest {
 /// builds read only the reviewed source PEM; a separately named build cfg is
 /// permitted solely for hermetic fixture binaries.
 pub fn compiled_public_key() -> Result<PublicKey> {
-    let value = configured_public_key();
+    compiled_public_key_value(configured_public_key())
+}
+
+fn compiled_public_key_value(value: &str) -> Result<PublicKey> {
     if value == "UNCONFIGURED" {
         bail!(
             "this binary was built without a configured immutable release-authentication public key"
@@ -92,7 +95,7 @@ pub fn compiled_public_key() -> Result<PublicKey> {
     }
     #[cfg(slurm_log_test_build)]
     {
-        return public_key_from_hex(value);
+        public_key_from_hex(value)
     }
     #[cfg(not(slurm_log_test_build))]
     {
@@ -397,6 +400,7 @@ mod tests {
     #[test]
     fn compiled_public_key_resolves_from_the_embedded_pem() {
         assert!(compiled_public_key().is_ok());
+        assert!(compiled_public_key_value("UNCONFIGURED").is_err());
     }
 
     #[test]
