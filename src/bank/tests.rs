@@ -121,6 +121,38 @@ fn bank_name_prefers_custom_then_git_then_directory() {
 }
 
 #[test]
+fn git_provenance_reads_head_and_dirtiness_from_a_repository() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["init", "-q"]);
+    run(&["commit", "-q", "--allow-empty", "-m", "init"]);
+    let (head, dirty) = git_provenance(&repo);
+    assert!(head.is_some(), "expected a resolved HEAD");
+    assert_eq!(dirty, Some(false));
+    fs::write(repo.join("untracked.sbatch"), b"#!/bin/sh\n").unwrap();
+    assert_eq!(git_provenance(&repo).1, Some(true));
+}
+
+#[test]
 fn duplicate_inferred_names_are_disambiguated_and_scoped() {
     let root = tempfile::tempdir().unwrap();
     let left = root.path().join("left/shared");
@@ -193,6 +225,31 @@ fn script_origin_uses_cluster_prefixes_and_keeps_ambiguous_files_shared() {
         infer_script_origin(&script("cluster/eval.sbatch"), &config),
         None
     );
+}
+
+#[test]
+fn script_origin_is_shared_when_multiple_clusters_match() {
+    let mut config = test_config(Vec::new());
+    config.clusters[0].name = "node".into();
+    config.clusters.push(ClusterConfig {
+        name: "node1".into(),
+        controller: None,
+        transport: "ssh".into(),
+        user: "alice".into(),
+        ssh_host: "node1.example".into(),
+        working_directory: PathBuf::from("/work"),
+        accounting: true,
+    });
+    let script = Script {
+        bank: "bank".into(),
+        relative: PathBuf::from("node12/train.sbatch"),
+        name: "job".into(),
+        directives: Vec::new(),
+        origin: None,
+        declared_results: Vec::new(),
+        bytes: Vec::new(),
+    };
+    assert_eq!(infer_script_origin(&script, &config), None);
 }
 
 #[test]
