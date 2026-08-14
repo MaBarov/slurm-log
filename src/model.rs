@@ -133,9 +133,8 @@ pub struct Pane {
 pub fn valid_job_id(id: &str) -> bool {
     let mut parts = id.split('_');
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    let Some(first) = parts.next() else {
-        return false;
-    };
+    // `split` always yields at least one element, even for an empty string.
+    let first = parts.next().unwrap_or_default();
     digits(first) && parts.next().is_none_or(digits) && parts.next().is_none()
 }
 
@@ -183,6 +182,7 @@ mod tests {
             terminal_text("name\x1b]52;c;bad\x07\r\n"),
             "name\\x1b]52;c;bad\\u{7}\\r\\n"
         );
+        assert_eq!(terminal_text("a\tb"), "a\\tb");
     }
 
     #[test]

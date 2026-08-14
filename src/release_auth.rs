@@ -257,13 +257,8 @@ fn decode_base64(value: &str) -> Result<Vec<u8>> {
             } else if third & 0x03 != 0 {
                 bail!("release public key PEM has non-canonical base64 padding");
             }
-        } else {
-            if fourth.is_some() {
-                bail!("release public key PEM has invalid base64 padding");
-            }
-            if second & 0x0f != 0 {
-                bail!("release public key PEM has non-canonical base64 padding");
-            }
+        } else if second & 0x0f != 0 {
+            bail!("release public key PEM has non-canonical base64 padding");
         }
     }
     Ok(output)
@@ -396,6 +391,34 @@ mod tests {
                 "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\nextra"
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn compiled_public_key_resolves_from_the_embedded_pem() {
+        assert!(compiled_public_key().is_ok());
+    }
+
+    #[test]
+    fn base64_padding_in_non_final_chunks_is_rejected() {
+        // A `=` in the third position of a non-final chunk (60 bytes, valid
+        // trailing `=`).
+        assert!(decode_base64(&format!("AA=A{}=", "A".repeat(55))).is_err());
+        // A `=` in the fourth position of a non-final chunk.
+        assert!(decode_base64(&format!("AAA={}=", "A".repeat(55))).is_err());
+    }
+
+    #[test]
+    fn single_byte_final_chunk_decodes_with_canonical_padding() {
+        // A trailing `AA==` chunk encodes exactly one byte; the low four bits of
+        // the second character are zero, so the padding is canonical and the
+        // decoder falls through without error (43 bytes here, length is checked
+        // later by `public_key_from_pem`).
+        assert_eq!(
+            decode_base64(&format!("{}AA==", "A".repeat(56)))
+                .unwrap()
+                .len(),
+            43
         );
     }
 }

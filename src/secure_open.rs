@@ -205,4 +205,30 @@ mod tests {
         symlink(&outside, root.join("nested")).unwrap();
         assert!(pinned.open_file(Path::new("nested/log")).is_err());
     }
+
+    #[test]
+    fn root_validation_rejects_nul_bytes_and_non_directories() {
+        let temporary = tempfile::tempdir().unwrap();
+        assert!(SecureDir::open_root(Path::new("bad\0root")).is_err());
+        let file = temporary.path().join("plain");
+        fs::write(&file, b"x").unwrap();
+        assert!(SecureDir::open_root(&file).is_err());
+    }
+
+    #[test]
+    fn relative_path_validation_accepts_current_components_and_rejects_empties() {
+        assert!(validate_relative(Path::new("a/./b")).is_ok());
+        assert!(validate_relative(Path::new("./")).is_err());
+        assert!(validate_relative(Path::new("..")).is_err());
+        assert!(validate_relative(Path::new("/absolute")).is_err());
+    }
+
+    #[test]
+    fn open_file_rejects_a_directory_beneath_the_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        fs::create_dir_all(root.join("subdir")).unwrap();
+        let pinned = SecureDir::open_root(&root).unwrap();
+        assert!(pinned.open_file(Path::new("subdir")).is_err());
+    }
 }
