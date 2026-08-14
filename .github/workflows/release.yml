@@ -155,6 +155,7 @@ jobs:
             ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.sha256
             ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.manifest
             ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.manifest.sig
+            install.sh
 
   publish:
     needs: [verify, sign]
@@ -211,4 +212,5 @@ jobs:
           dist/slurm-log-linux-x86_64.tar.gz.sha256
           dist/slurm-log-linux-x86_64.tar.gz.manifest
           dist/slurm-log-linux-x86_64.tar.gz.manifest.sig
+          dist/install.sh
           --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
