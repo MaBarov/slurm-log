@@ -3,6 +3,8 @@ struct LoadedBank {
     name: String,
     first: usize,
     last: usize,
+    path: PathBuf,
+    available: bool,
 }
 
 fn inferred_name(bank: &SbatchBankConfig) -> Result<String> {
@@ -123,6 +125,7 @@ fn scan_all_inner(
                 .into_iter()
                 .map(|warning| format!("{name}: {warning}")),
         );
+        let available = payload.error.is_none();
         if let Some(error) = payload.error {
             warnings.push(format!("{name}: unavailable ({error})"));
         }
@@ -130,6 +133,8 @@ fn scan_all_inner(
             name,
             first,
             last: scripts.len(),
+            path: configured.path.clone(),
+            available,
         });
         if scripts.len() == MAX_SCRIPTS {
             break;
@@ -184,6 +189,123 @@ pub fn configured_scripts(config: &Config) -> Result<(Vec<Script>, Vec<String>)>
 pub fn configured_scripts_fresh(config: &Config) -> Result<(Vec<Script>, Vec<String>)> {
     let (_, scripts, warnings) = scan_all_fresh(config)?;
     Ok((scripts, warnings))
+}
+
+/// Catalog-level metadata reported alongside script lists and `slurm_doctor`.
+/// Distinguishes a healthy catalog with zero matches from a catalog that could
+/// not be read at all, and carries provenance the client can bind previews to.
+#[derive(Clone, Debug)]
+pub struct BankMeta {
+    pub name: String,
+    pub path: PathBuf,
+    pub available: bool,
+    pub script_count: usize,
+    pub indexed_at: Option<String>,
+    pub generation: Option<String>,
+    pub repo_head: Option<String>,
+    pub dirty: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CatalogMeta {
+    pub available: bool,
+    pub generation: String,
+    pub indexed_at: Option<String>,
+    pub banks: Vec<BankMeta>,
+}
+
+pub fn catalog(config: &Config, force: bool) -> Result<(Vec<Script>, Vec<String>, CatalogMeta)> {
+    let (banks, scripts, warnings) = if force {
+        scan_all_fresh(config)?
+    } else {
+        scan_all(config)?
+    };
+    let mut meta = Vec::with_capacity(banks.len());
+    let mut latest: Option<SystemTime> = None;
+    for bank in &banks {
+        let generation = bank_tree_fingerprint(&bank.path).map(|value| format!("{value:016x}"));
+        let indexed_at = cache_mtime(config, &bank.path).map(rfc3339);
+        if let Some(at) = cache_mtime(config, &bank.path) {
+            latest = Some(latest.map_or(at, |previous: SystemTime| previous.max(at)));
+        }
+        let (repo_head, dirty) = git_provenance(&bank.path);
+        meta.push(BankMeta {
+            name: bank.name.clone(),
+            path: bank.path.clone(),
+            available: bank.available,
+            script_count: bank.last - bank.first,
+            indexed_at,
+            generation,
+            repo_head,
+            dirty,
+        });
+    }
+    Ok((
+        scripts,
+        warnings,
+        CatalogMeta {
+            available: meta.iter().any(|bank| bank.available),
+            generation: catalog_generation(config),
+            indexed_at: latest.map(rfc3339),
+            banks: meta,
+        },
+    ))
+}
+
+/// A stable token that changes only when a configured bank's tree fingerprint
+/// changes. Cheap (stat-only) and independent of git or a full rescan, so it
+/// can bind a submission preview to the exact catalog it was minted from.
+pub fn catalog_generation(config: &Config) -> String {
+    let mut combined = DefaultHasher::new();
+    for configured in &config.sbatch_banks {
+        configured.path.hash(&mut combined);
+        if let Some(fingerprint) = bank_tree_fingerprint(&configured.path) {
+            fingerprint.hash(&mut combined);
+        }
+    }
+    format!("{:016x}", combined.finish())
+}
+
+fn cache_mtime(config: &Config, root: &Path) -> Option<SystemTime> {
+    fs::metadata(bank_cache_path(config, root))
+        .ok()?
+        .modified()
+        .ok()
+}
+
+fn rfc3339(value: SystemTime) -> String {
+    let datetime: time::OffsetDateTime = value.into();
+    datetime
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "unknown".into())
+}
+
+/// Best-effort git provenance for a bank directory. Both probes are local,
+/// fixed argv (never a shell), and deadline-bounded; absence of git yields
+/// `None` rather than an error.
+fn git_provenance(root: &Path) -> (Option<String>, Option<bool>) {
+    let Some(repo) = git_root(root) else {
+        return (None, None);
+    };
+    let repo = repo.to_string_lossy().into_owned();
+    let head = output_with_timeout("git", &["-C", repo.as_str(), "rev-parse", "HEAD"], Duration::from_secs(3))
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty());
+    let dirty = output_with_timeout("git", &["-C", repo.as_str(), "status", "--porcelain"], Duration::from_secs(3))
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| !output.stdout.is_empty());
+    (head, dirty)
+}
+
+fn git_root(path: &Path) -> Option<PathBuf> {
+    let canonical = fs::canonicalize(path).ok()?;
+    canonical
+        .ancestors()
+        .find(|directory| directory.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 fn directive_job_name(directives: &[String]) -> Option<String> {
@@ -257,108 +379,4 @@ fn routing_controller(value: &str) -> Result<&str> {
         bail!("sbatch routing directive must contain exactly one controller name");
     }
     Ok(controller)
-}
-
-pub fn submit(config: &Config, script: &Script, cluster: &str) -> Result<Job> {
-    let target = config.cluster(cluster)?;
-    validate_script_controller(script, target)?;
-    let mut args = vec!["--parsable"];
-    if target.binds_controller() {
-        args.extend(["--clusters", target.controller()]);
-    }
-    let output = if target.remote() {
-        let remote = remote_scheduler_command("sbatch", &args, Some(&target.working_directory));
-        ssh_with_input(&target.ssh_host, &remote, &script.bytes)?
-    } else {
-        text_with_input(
-            "sbatch",
-            &args,
-            &script.bytes,
-            Some(&target.working_directory),
-        )?
-    };
-    let mut parts = output.trim().split(';');
-    let id = parts.next().unwrap_or("");
-    if !valid_job_id(id) {
-        bail!("sbatch returned an invalid job ID: {:?}", output.trim());
-    }
-    let actual_controller = parts.next();
-    if target.remote() && target.binds_controller() && actual_controller.is_none() {
-        bail!(
-            "remote sbatch did not return a controller identity for configured controller {:?}",
-            target.controller()
-        );
-    }
-    if target.binds_controller()
-        && let Some(actual_controller) = actual_controller
-        && actual_controller != target.controller()
-    {
-        bail!(
-            "sbatch submitted to controller {actual_controller:?}, not configured controller {:?}",
-            target.controller()
-        );
-    }
-    if parts.next().is_some() {
-        bail!("sbatch returned malformed parsable output: {:?}", output.trim());
-    }
-    crate::slurm::invalidate_caches(config);
-    Ok(Job {
-        cluster: cluster.into(),
-        id: id.into(),
-        state: "PENDING".into(),
-        name: script.name.clone(),
-        ..Job::default()
-    })
-}
-
-pub fn cancel(config: &Config, jobs: &[Job]) -> Result<Vec<String>> {
-    let mut checked = Vec::new();
-    for job in jobs.iter().filter(|job| job.active()) {
-        if !valid_job_id(&job.id) {
-            bail!("invalid job ID {}", job.id);
-        }
-        let fresh = crate::slurm::fresh_cancellable_job(config, &job.cluster, &job.id)?;
-        if !job.name.is_empty() && job.name != fresh.name {
-            bail!(
-                "job {}:{} changed name before cancellation",
-                job.cluster,
-                job.id
-            );
-        }
-        checked.push(fresh);
-    }
-    cancel_verified(config, &checked)
-}
-
-/// Dispatch only jobs that have just passed `fresh_cancellable_job`.  MCP
-/// cancellation invokes that check itself to compare the user-supplied name,
-/// while the CLI and picker enter through `cancel` above.
-pub(crate) fn cancel_verified(config: &Config, jobs: &[Job]) -> Result<Vec<String>> {
-    let mut grouped: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for job in jobs.iter().filter(|job| job.active()) {
-        if !valid_job_id(&job.id) {
-            bail!("invalid job ID {}", job.id);
-        }
-        grouped.entry(&job.cluster).or_default().push(&job.id);
-    }
-    let mut failures = Vec::new();
-    for (cluster, ids) in grouped {
-        let target = config.cluster(cluster)?;
-        let mut args = Vec::new();
-        if target.binds_controller() {
-            args.extend(["--clusters", target.controller()]);
-        }
-        args.extend(ids);
-        let result = if target.remote() {
-            let command = remote_scheduler_command("scancel", &args, None);
-            crate::command::ssh(&target.ssh_host, &command).map(|_| ())
-        } else {
-            text("scancel", &args).map(|_| ())
-        };
-        if let Err(error) = result {
-            failures.push(format!("{cluster}: {error:#}"));
-        }
-    }
-    crate::slurm::invalidate_caches(config);
-    Ok(failures)
 }

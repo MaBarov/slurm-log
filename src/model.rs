@@ -95,7 +95,7 @@ impl Job {
     }
 }
 
-fn pending_explanation(reason: &str) -> String {
+pub fn pending_explanation(reason: &str) -> String {
     let reason = reason.trim_matches(['(', ')']);
     let explanation = if reason == "Priority" {
         "waiting behind higher-priority jobs"

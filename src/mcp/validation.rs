@@ -49,6 +49,94 @@ pub fn tool_arguments(name: &str, args: &JsonObject) -> Result<()> {
             strings(args, &[("cluster", 48), ("search", 256), ("cursor", 128)])?;
             integer(args, "limit", 1, 200)
         }
+        "slurm_doctor" | "slurm_refresh_bank" => no_arguments(args),
+        "slurm_wait_job" => {
+            job(args, &["until", "timeout_seconds", "interval_seconds"])?;
+            strings(args, &[("until", 16)])?;
+            integer(args, "timeout_seconds", 1, 30)?;
+            integer(args, "interval_seconds", 1, 10)
+        }
+        "slurm_explain_pending" => job(args, &[]),
+        "slurm_find_artifact" => {
+            job(args, &["pattern", "search_root", "max_bytes"])?;
+            required_string(args, "pattern", 256)?;
+            strings(args, &[("search_root", 512)])?;
+            integer(args, "max_bytes", 1, 262144)
+        }
+        "slurm_stage_bundle" => {
+            keys(args, &["bank", "entries", "destination", "version"])?;
+            strings(args, &[("bank", 48), ("destination", 16), ("version", 8)])?;
+            if let Some(destination) = args.get("destination").and_then(Value::as_str)
+                && !matches!(destination, "local" | "remote")
+            {
+                bail!("destination must be local or remote");
+            }
+            if let Some(version) = args.get("version").and_then(Value::as_str)
+                && version != "v1"
+            {
+                bail!("unsupported bundle version {version}");
+            }
+            let entries = args
+                .get("entries")
+                .and_then(Value::as_array)
+                .with_context(|| "entries is required")?;
+            if entries.is_empty() || entries.len() > 512 {
+                bail!("entries must contain 1..512 paths");
+            }
+            for entry in entries {
+                let entry = entry
+                    .as_str()
+                    .with_context(|| "each bundle entry must be a string")?;
+                if entry.is_empty() || entry.len() > 1024 {
+                    bail!("each bundle entry must be 1..1024 bytes");
+                }
+                crate::bank::validate_manifest_path(entry)?;
+            }
+            Ok(())
+        }
+        "slurm_adopt_job" => {
+            job(args, &["batch_script_sha256"])?;
+            strings(args, &[("batch_script_sha256", 64)])?;
+            if let Some(hash) = args.get("batch_script_sha256").and_then(Value::as_str)
+                && (hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            {
+                bail!("batch_script_sha256 must be a 64-character lowercase hex digest");
+            }
+            Ok(())
+        }
+        "slurm_preflight_job" => {
+            keys(args, &["cluster", "script", "wait_seconds"])?;
+            required_string(args, "cluster", 48)?;
+            required_string(args, "script", 4096)?;
+            integer(args, "wait_seconds", 1, 60)
+        }
+        "slurm_preview_resubmit" => {
+            keys(args, &["cluster", "job_id", "script", "schedule_overrides"])?;
+            required_string(args, "cluster", 48)?;
+            required_string(args, "job_id", 128)?;
+            required_string(args, "script", 4096)?;
+            if let Some(overrides) = args.get("schedule_overrides") {
+                let object = overrides
+                    .as_object()
+                    .with_context(|| "schedule_overrides must be an object")?;
+                if object.len() > 11 {
+                    bail!("schedule_overrides exceeds 11 keys");
+                }
+                for (key, value) in object {
+                    if !crate::bank::SCHEDULE_OVERRIDE_KEYS.contains(&key.as_str()) {
+                        bail!("unknown schedule override {key}");
+                    }
+                    let value = value
+                        .as_str()
+                        .with_context(|| format!("schedule override {key} must be a string"))?;
+                    let maximum = if key == "gres" { 256 } else { 128 };
+                    if value.is_empty() || value.len() > maximum {
+                        bail!("schedule override {key} must be 1..{maximum} bytes");
+                    }
+                }
+            }
+            Ok(())
+        }
         "slurm_preview_submission" => {
             keys(args, &["cluster", "script"])?;
             required_string(args, "cluster", 48)?;
@@ -154,123 +242,5 @@ fn string_array(args: &JsonObject, name: &str, maximum: usize, string_max: usize
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn object(value: Value) -> JsonObject {
-        value.as_object().unwrap().clone()
-    }
-
-    #[test]
-    fn hostile_unknown_and_wrong_typed_arguments_are_rejected() {
-        assert!(
-            tool_arguments(
-                "slurm_read_log",
-                &object(json!({
-                    "cluster":"alpha","job_id":"1","path":"/etc/passwd"
-                }))
-            )
-            .is_err()
-        );
-        assert!(tool_arguments("slurm_list_jobs", &object(json!({"limit":0}))).is_err());
-        assert!(tool_arguments("slurm_list_jobs", &object(json!({"cluster":7}))).is_err());
-        assert!(tool_arguments("missing", &JsonObject::new()).is_err());
-    }
-
-    #[test]
-    fn every_tool_shape_and_bound_is_validated() {
-        for name in ["slurm_list_clusters", "slurm_workspace_context"] {
-            assert!(tool_arguments(name, &JsonObject::new()).is_ok());
-            assert!(tool_arguments(name, &object(json!({"extra":true}))).is_err());
-        }
-        assert!(
-            tool_arguments(
-                "slurm_list_jobs",
-                &object(json!({
-                    "cluster":"alpha", "history":"1d", "states":["RUNNING"],
-                    "include_blocked":false, "search":"x", "cursor":"jobs:1", "limit":200
-                }))
-            )
-            .is_ok()
-        );
-        assert!(
-            tool_arguments(
-                "slurm_inspect_job",
-                &object(json!({"cluster":"a","job_id":"1"}))
-            )
-            .is_ok()
-        );
-        assert!(
-            tool_arguments(
-                "slurm_diagnose_job",
-                &object(json!({"cluster":"a","job_id":"1"}))
-            )
-            .is_ok()
-        );
-        assert!(
-            tool_arguments(
-                "slurm_read_log",
-                &object(json!({
-                    "cluster":"a","job_id":"1","cursor":"v1:x","lines":2000,"filter":"all"
-                }))
-            )
-            .is_ok()
-        );
-        assert!(
-            tool_arguments(
-                "slurm_search_log",
-                &object(json!({
-                    "cluster":"a","job_id":"1","pattern":"x","regex":true,
-                    "max_matches":500,"context_lines":0
-                }))
-            )
-            .is_ok()
-        );
-        assert!(tool_arguments("slurm_list_scripts", &object(json!({"limit":1}))).is_ok());
-        assert!(
-            tool_arguments(
-                "slurm_preview_submission",
-                &object(json!({
-                    "cluster":"a","script":"Bank/x.sbatch"
-                }))
-            )
-            .is_ok()
-        );
-        assert!(tool_arguments("slurm_submit_job", &object(json!({"preview_token":"x"}))).is_ok());
-        assert!(
-            tool_arguments(
-                "slurm_cancel_job",
-                &object(json!({
-                    "cluster":"a","job_id":"1","expected_job_name":"train"
-                }))
-            )
-            .is_ok()
-        );
-
-        assert!(
-            tool_arguments(
-                "slurm_search_log",
-                &object(json!({
-                    "cluster":"a","job_id":"1","pattern":"x","regex":"yes"
-                }))
-            )
-            .is_err()
-        );
-        assert!(tool_arguments("slurm_list_jobs", &object(json!({"states":"RUNNING"}))).is_err());
-        assert!(tool_arguments("slurm_list_jobs", &object(json!({"states":[7]}))).is_err());
-        assert!(
-            tool_arguments("slurm_list_jobs", &object(json!({"states":vec!["x"; 33]}))).is_err()
-        );
-        assert!(tool_arguments("slurm_submit_job", &object(json!({"preview_token":""}))).is_err());
-        assert!(
-            tool_arguments(
-                "slurm_search_log",
-                &object(json!({
-                    "cluster":"a","job_id":"1","pattern":"x","context_lines":21
-                }))
-            )
-            .is_err()
-        );
-    }
-}
+#[path = "validation/tests.rs"]
+mod tests;

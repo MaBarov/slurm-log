@@ -252,11 +252,15 @@ fn bank_rows_cover_nested_expansion_cluster_filtering_and_search() {
             name: "bank".into(),
             first: 0,
             last: 3,
+            path: PathBuf::from("/tmp/bank"),
+            available: true,
         },
         LoadedBank {
             name: "remote".into(),
             first: 3,
             last: 4,
+            path: PathBuf::from("/tmp/remote"),
+            available: true,
         },
     ];
 
@@ -421,6 +425,8 @@ fn builds_twenty_thousand_bank_rows_within_budget() {
         name: "bank".into(),
         first: 0,
         last: scripts.len(),
+        path: PathBuf::from("/tmp/bank"),
+        available: true,
     }];
     let index_started = std::time::Instant::now();
     let index = BankIndex::new(&banks, &scripts, ["local"]);

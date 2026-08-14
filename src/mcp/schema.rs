@@ -110,6 +110,155 @@ pub fn tools(config: &Config) -> Vec<Tool> {
                 &[],
             ),
         ),
+        read_tool(
+            "slurm_doctor",
+            "Report cluster reachability, bank health, indexed script counts, catalog generation, last refresh, and warnings, distinguishing bank health from scheduler health.",
+            object(BTreeMap::new(), &[]),
+        ),
+        read_tool(
+            "slurm_refresh_bank",
+            "Force a fresh sbatch-bank rescan and return the new script count, catalog generation, and indexed timestamp.",
+            object(BTreeMap::new(), &[]),
+        ),
+        wait_tool(
+            "slurm_wait_job",
+            "Wait server-side for a job state change, completion, or log change up to a bounded timeout, instead of polling squeue from the client.",
+            object(
+                BTreeMap::from([
+                    ("cluster", exact.clone()),
+                    ("job_id", job_id()),
+                    (
+                        "until",
+                        enum_property(
+                            &["state_change", "completion", "log_change"],
+                            Some("completion"),
+                        ),
+                    ),
+                    ("timeout_seconds", bounded_integer(1, 30, 30)),
+                    ("interval_seconds", bounded_integer(1, 10, 2)),
+                ]),
+                &["cluster", "job_id"],
+            ),
+        ),
+        read_tool(
+            "slurm_explain_pending",
+            "Explain why a pending job is not scheduled, including reason, requested partition, priority, and observed partition availability.",
+            job_input(exact.clone()),
+        ),
+        read_tool(
+            "slurm_find_artifact",
+            "Safely search the configured local working directory of an exact owner-scoped job for result artifacts matching a declared filename pattern; content is bounded, MIME-sniffed, and confined beneath the configured root.",
+            object(
+                BTreeMap::from([
+                    ("cluster", exact.clone()),
+                    ("job_id", job_id()),
+                    (
+                        "pattern",
+                        json!({"type":"string","minLength":1,"maxLength":256}),
+                    ),
+                    (
+                        "search_root",
+                        json!({"type":"string","maxLength":512,"default":"."}),
+                    ),
+                    ("max_bytes", bounded_integer(1, 262144, 262144)),
+                ]),
+                &["cluster", "job_id", "pattern"],
+            ),
+        ),
+        mutation_tool(
+            "slurm_adopt_job",
+            "Adopt an externally-submitted (manual sbatch) job into provenance tracking; record the observed batch-script hash and mark it externally_submitted without implying MCP preview authorization.",
+            object(
+                BTreeMap::from([
+                    ("cluster", exact.clone()),
+                    ("job_id", job_id()),
+                    (
+                        "batch_script_sha256",
+                        json!({"type":"string","pattern":"^[0-9a-f]{64}$"}),
+                    ),
+                ]),
+                &["cluster", "job_id"],
+            ),
+            false,
+        ),
+        mutation_tool(
+            "slurm_stage_bundle",
+            "Stage a content-addressed bundle of repo-relative manifest entries from an exact configured bank; entries are bounded, checked for prohibited paths and private-key markers, and written to an immutable destination so a second identical stage fails without overwriting.",
+            object(
+                BTreeMap::from([
+                    ("bank", json!({"type":"string","maxLength":48})),
+                    (
+                        "entries",
+                        json!({
+                            "type":"array",
+                            "minItems":1,
+                            "maxItems":512,
+                            "items":{"type":"string","minLength":1,"maxLength":1024}
+                        }),
+                    ),
+                    (
+                        "destination",
+                        json!({"type":"string","enum":["local","remote"],"default":"remote"}),
+                    ),
+                    ("version", json!({"type":"string","enum":["v1"]})),
+                ]),
+                &["entries"],
+            ),
+            false,
+        ),
+        mutation_tool(
+            "slurm_preflight_job",
+            "Submit a tiny fixed probe job with only the partition and GPU request copied from an exact configured-bank script, wait briefly for it to complete, cancel it if it lingers, and report the probe state and bounded log.",
+            object(
+                BTreeMap::from([
+                    ("cluster", exact.clone()),
+                    (
+                        "script",
+                        json!({"type":"string","minLength":1,"maxLength":4096}),
+                    ),
+                    ("wait_seconds", bounded_integer(1, 60, 30)),
+                ]),
+                &["cluster", "script"],
+            ),
+            true,
+        ),
+        mutation_tool(
+            "slurm_preview_resubmit",
+            "Mint a five-minute one-use resubmission preview for a terminal exact job whose name and producer script hash are unchanged; only scheduling overrides are allowed and the actual submission still requires slurm_submit_job.",
+            object(
+                BTreeMap::from([
+                    ("cluster", exact.clone()),
+                    ("job_id", job_id()),
+                    (
+                        "script",
+                        json!({"type":"string","minLength":1,"maxLength":4096}),
+                    ),
+                    (
+                        "schedule_overrides",
+                        json!({
+                            "type":"object",
+                            "maxProperties":11,
+                            "additionalProperties":false,
+                            "properties": {
+                                "partition": {"type":"string","maxLength":128},
+                                "time": {"type":"string","maxLength":128},
+                                "mem": {"type":"string","maxLength":128},
+                                "cpus": {"type":"string","maxLength":128},
+                                "ntasks": {"type":"string","maxLength":128},
+                                "nodes": {"type":"string","maxLength":128},
+                                "gres": {"type":"string","maxLength":256},
+                                "qos": {"type":"string","maxLength":128},
+                                "account": {"type":"string","maxLength":128},
+                                "constraint": {"type":"string","maxLength":128},
+                                "exclude": {"type":"string","maxLength":128}
+                            }
+                        }),
+                    ),
+                ]),
+                &["cluster", "job_id", "script"],
+            ),
+            false,
+        ),
         mutation_tool(
             "slurm_preview_submission",
             "Preview an exact configured-bank script for an explicitly selected cluster and mint a five-minute one-use token.",
@@ -176,6 +325,16 @@ fn mutation_tool(
         ToolAnnotations::with_title(name.replace('_', " "))
             .read_only(false)
             .destructive(destructive)
+            .idempotent(false)
+            .open_world(false),
+    )
+}
+
+fn wait_tool(name: &'static str, description: &'static str, input: JsonObject) -> Tool {
+    base_tool(name, description, input).with_annotations(
+        ToolAnnotations::with_title(name.replace('_', " "))
+            .read_only(true)
+            .destructive(false)
             .idempotent(false)
             .open_world(false),
     )
@@ -255,56 +414,5 @@ pub fn paginate_tools(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn schemas_are_object_rooted_and_mutations_are_not_read_only() {
-        let config = Config {
-            local_user: "alice".into(),
-            remote_user: "alice".into(),
-            ssh_host: String::new(),
-            state_path: PathBuf::from("/tmp/state"),
-            executable: PathBuf::from("/bin/slurm-log"),
-            sbatch_banks: Vec::new(),
-            clusters: vec![crate::config::ClusterConfig {
-                name: "alpha".into(),
-                controller: None,
-                transport: "local".into(),
-                user: "alice".into(),
-                ssh_host: String::new(),
-                working_directory: PathBuf::from("/tmp"),
-                accounting: false,
-            }],
-        };
-        let tools = tools(&config);
-        assert_eq!(tools.len(), 11);
-        for tool in &tools {
-            assert_eq!(
-                tool.input_schema.get("type").and_then(Value::as_str),
-                Some("object")
-            );
-            assert_eq!(
-                tool.output_schema
-                    .as_ref()
-                    .unwrap()
-                    .get("type")
-                    .and_then(Value::as_str),
-                Some("object")
-            );
-        }
-        let submit = tools
-            .iter()
-            .find(|tool| tool.name == "slurm_submit_job")
-            .unwrap();
-        assert_eq!(
-            submit.annotations.as_ref().unwrap().read_only_hint,
-            Some(false)
-        );
-        assert_eq!(
-            submit.annotations.as_ref().unwrap().destructive_hint,
-            Some(true)
-        );
-    }
-}
+#[path = "schema/tests.rs"]
+mod tests;
