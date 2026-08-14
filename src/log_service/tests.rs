@@ -113,3 +113,11 @@ fn local_reads_reject_multi_link_files() {
     let file = File::open(path).unwrap();
     assert!(local_read(&file, &ReadMode::Metadata).is_err());
 }
+
+#[test]
+fn resolve_rejects_invalid_job_ids_before_authorization() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = config(directory.path(), false);
+    let error = resolve(&config, "alpha", "not a valid id").unwrap_err();
+    assert!(format!("{error:#}").contains("invalid job ID"));
+}
