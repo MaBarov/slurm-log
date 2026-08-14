@@ -1,7 +1,14 @@
 use super::*;
+use std::path::PathBuf;
 
 #[test]
 fn cancellation_scope_rejects_array_masters_and_ranges_but_accepts_one_task() {
+    let unproven = CancelMetadata::from_scontrol(
+        "JobId=700_3 UserId=offline(1000) JobName=train JobState=RUNNING",
+    )
+    .unwrap();
+    assert!(unproven.prove_exact_cancel_scope("700_3").is_err());
+
     let master = CancelMetadata::from_scontrol(
         "JobId=700 UserId=offline(1000) JobName=train JobState=RUNNING ArrayJobId=700 ArrayTaskId=0-9",
     )
@@ -25,6 +32,28 @@ fn cancellation_scope_rejects_array_masters_and_ranges_but_accepts_one_task() {
     )
     .unwrap();
     ordinary.prove_exact_cancel_scope("701").unwrap();
+}
+
+#[test]
+fn cancellation_rejects_an_invalid_job_id_before_any_scheduler_call() {
+    let config = Config {
+        local_user: "offline".into(),
+        remote_user: "offline".into(),
+        ssh_host: String::new(),
+        state_path: PathBuf::from("/tmp/state.json"),
+        executable: PathBuf::from("slurm-log"),
+        sbatch_banks: Vec::new(),
+        clusters: vec![crate::config::ClusterConfig {
+            name: "local".into(),
+            controller: None,
+            transport: "local".into(),
+            user: "offline".into(),
+            ssh_host: String::new(),
+            working_directory: PathBuf::from("/tmp"),
+            accounting: true,
+        }],
+    };
+    assert!(fresh_cancellable_job(&config, "local", "not-a-job-id").is_err());
 }
 
 #[test]

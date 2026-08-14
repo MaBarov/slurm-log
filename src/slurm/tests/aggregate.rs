@@ -66,6 +66,12 @@ fn direct_aggregation_uses_complete_archive_caches_and_filters_canonically() {
 }
 
 #[test]
+fn history_mode_horizons_cover_the_all_mode() {
+    assert_eq!(HistoryMode::Live.terminal_horizon(), Some(2 * 60));
+    assert_eq!(HistoryMode::All.terminal_horizon(), None);
+}
+
+#[test]
 fn recent_end_parser_accepts_local_timestamps_without_an_explicit_offset() {
     let ended = OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
