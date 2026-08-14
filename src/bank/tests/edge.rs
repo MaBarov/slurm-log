@@ -131,6 +131,7 @@ fn catalog_helpers_cover_empty_names_origins_directives_and_cluster_support() {
         name: "run".into(),
         directives: Vec::new(),
         origin: None,
+        declared_results: Vec::new(),
         bytes: Vec::new(),
     };
     assert!(supports_cluster(&shared, "local"));
@@ -153,6 +154,7 @@ fn routing_directives_require_one_matching_controller() {
         name: "run".into(),
         directives: vec![directive.into()],
         origin: None,
+        declared_results: Vec::new(),
         bytes: Vec::new(),
     };
 
@@ -187,6 +189,21 @@ fn scan_worker_validates_arguments_and_serializes_failures() {
     .unwrap();
     let payload: ScanPayload = rmp_serde::from_slice(&fs::read(output).unwrap()).unwrap();
     assert!(payload.error.unwrap().contains("configured sbatch bank"));
+}
+
+#[test]
+fn sbatch_directives_skip_blank_lines_and_stop_at_body_text() {
+    assert_eq!(
+        sbatch_directives(
+            "\n#SBATCH --job-name=blank\n   \n\t\n#SBATCH --gres=gpu:1\n# just a comment\necho body\n#SBATCH ignored\n"
+        ),
+        ["--job-name=blank", "--gres=gpu:1"]
+    );
+    assert!(sbatch_directives("").is_empty());
+    assert_eq!(
+        sbatch_directives("#SBATCH#SBATCH\n"),
+        ["#SBATCH".to_string()]
+    );
 }
 
 #[test]
@@ -298,4 +315,23 @@ fn configured_bank_scan_rejects_hard_linked_scripts() {
             .iter()
             .any(|warning| warning.contains("changed while scanning"))
     );
+}
+
+#[test]
+fn declared_result_markers_are_restricted_basename_globs() {
+    let bytes = b"#!/bin/sh\n#SBATCH --job-name=gate\n\
+        #SLURM_LOG-RESULT: cpu_gate.json\n\
+        #SLURM_LOG-RESULT: verifier-receipt.txt\n\
+        #SLURM_LOG-RESULT: cpu_gate.json\n\
+        #SLURM_LOG-RESULT: ../outside.json\n\
+        #SLURM_LOG-RESULT: /abs.json\n\
+        #SLURM_LOG-RESULT: deep/dir/out.json\n\
+        #SLURM_LOG-RESULT: bad;pattern\n\
+        #SLURM_LOG-RESULT:\n\
+        echo \"#SLURM_LOG-RESULT: not-a-comment-declaration\"\n";
+    assert_eq!(
+        parse_declared_results(bytes),
+        ["cpu_gate.json", "verifier-receipt.txt"]
+    );
+    assert!(parse_declared_results(b"#!/bin/sh\necho none\n").is_empty());
 }

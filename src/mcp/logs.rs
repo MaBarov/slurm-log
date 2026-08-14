@@ -295,6 +295,33 @@ fn findings(
             "Inspect Slurm node reason and retry on a healthy allocation.",
         );
     }
+    if state.starts_with("CANCELLED") {
+        push_finding(
+            &mut found,
+            "job_cancelled",
+            "high",
+            &[state],
+            "Confirm whether the user, the scheduler, or a pending-time policy cancelled the job before resubmitting.",
+        );
+    }
+    let environment_evidence = evidence_lines(
+        text,
+        &[
+            "No module named",
+            "ModuleNotFoundError",
+            "command not found",
+        ],
+        3,
+    );
+    if !environment_evidence.is_empty() {
+        push_finding(
+            &mut found,
+            "environment_setup",
+            "medium",
+            &environment_evidence,
+            "Check that the required module, venv, or working directory was available inside the allocation.",
+        );
+    }
     found
 }
 

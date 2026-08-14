@@ -67,6 +67,8 @@ pub struct Script {
     pub directives: Vec<String>,
     #[serde(default)]
     pub origin: Option<String>,
+    #[serde(default)]
+    pub declared_results: Vec<String>,
     pub(crate) bytes: Vec<u8>,
 }
 

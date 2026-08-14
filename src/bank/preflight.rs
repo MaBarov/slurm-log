@@ -8,7 +8,7 @@
 
 /// The only `#SBATCH` options a resubmission preview may override. Values
 /// must consist of scheduling-safe characters and are emitted verbatim.
-pub const SCHEDULE_OVERRIDE_KEYS: [&str; 11] = [
+pub const SCHEDULE_OVERRIDE_KEYS: [&str; 12] = [
     "partition",
     "time",
     "mem",
@@ -20,6 +20,7 @@ pub const SCHEDULE_OVERRIDE_KEYS: [&str; 11] = [
     "account",
     "constraint",
     "exclude",
+    "dependency",
 ];
 
 /// Extract `(partition, gres)` scheduling constraints from sbatch directives.
@@ -89,6 +90,7 @@ fn option_key(token: &str) -> Option<&'static str> {
         "--account" => "account",
         "--constraint" => "constraint",
         "--exclude" => "exclude",
+        "--dependency" => "dependency",
         _ => "",
     };
     if !long.is_empty() {
@@ -108,6 +110,7 @@ fn option_key(token: &str) -> Option<&'static str> {
         "-A" => Some("account"),
         "-C" => Some("constraint"),
         "-x" => Some("exclude"),
+        "-d" => Some("dependency"),
         _ if tail.is_empty() => None,
         _ => None,
     }
@@ -124,6 +127,54 @@ fn validate_token<'a>(value: &'a str, field: &str) -> Result<&'a str> {
         bail!(
             "{field} value {value:?} must be at most {maximum} scheduler-token characters"
         );
+    }
+    Ok(value)
+}
+
+// Validate a Slurm `--dependency` value: comma-separated `type:jobid[:jobid...]`
+// terms using after/afterany/afternotok/afterok or bare singleton; job IDs are
+// digits with an optional `_N` array suffix and an optional `?`/`+` modifier.
+fn validate_dependency(value: &str) -> Result<&str> {
+    if value.is_empty() || value.len() > 256 {
+        bail!("dependency value {value:?} must be 1..256 dependency characters");
+    }
+    let is_number = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    for term in value.split(',') {
+        let term = term.trim();
+        let (kind, jobs) = term.split_once(':').unwrap_or((term, ""));
+        match kind {
+            "singleton" => {
+                if !jobs.is_empty() {
+                    bail!("dependency singleton takes no job id, got {value:?}");
+                }
+            }
+            "after" | "afterany" | "afternotok" | "afterok" => {
+                if jobs.is_empty() {
+                    bail!("dependency {kind} requires at least one job id, got {value:?}");
+                }
+                for job in jobs.split(':') {
+                    if job.is_empty() {
+                        bail!("dependency has an empty job id in {value:?}");
+                    }
+                    let job = job.strip_suffix(['?', '+']).unwrap_or(job);
+                    let mut parts = job.split('_');
+                    let number = parts.next().unwrap_or("");
+                    if !is_number(number) {
+                        bail!("dependency job id {job:?} in {value:?} is not numeric");
+                    }
+                    match parts.next() {
+                        None => {}
+                        Some(array) if is_number(array) && parts.next().is_none() => {}
+                        _ => bail!(
+                            "dependency job id {job:?} in {value:?} has an invalid array suffix"
+                        ),
+                    }
+                }
+            }
+            _ => bail!(
+                "dependency term {term:?} must use after, afterany, afternotok, afterok, or singleton"
+            ),
+        }
     }
     Ok(value)
 }
@@ -174,10 +225,12 @@ pub fn parse_overrides(value: Option<&serde_json::Value>) -> Result<Option<BTree
         let value = value
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("schedule override {key:?} must be a string"))?;
-        overrides.insert(
-            key.clone(),
-            validate_token(value, key).map(str::to_string)?,
-        );
+        let value = if key == "dependency" {
+            validate_dependency(value).map(str::to_string)?
+        } else {
+            validate_token(value, key).map(str::to_string)?
+        };
+        overrides.insert(key.clone(), value);
     }
     Ok(Some(overrides))
 }
@@ -326,6 +379,53 @@ mod preflight_tests {
         assert!(!attached.contains("-pgpu"), "{attached}");
         assert!(attached.contains("#SBATCH --partition=cpu"), "{attached}");
         assert!(attached.contains("#SBATCH --mem=2G"), "{attached}");
+        assert!(attached.contains("sleep 1"), "{attached}");
+    }
+
+    #[test]
+    fn dependency_overrides_enforce_slurm_grammar() {
+        let accepted = |value: &str| {
+            parse_overrides(Some(&serde_json::json!({"dependency": value})))
+                .unwrap()
+                .unwrap()
+                .remove("dependency")
+                .unwrap()
+        };
+        for value in [
+            "afterok:123", "afterok:123:456", "afterany:12_3?", "afternotok:45+",
+            "after:1,afterok:2", "singleton", "afterok:123_1",
+        ] {
+            assert_eq!(accepted(value), value, "rejected dependency {value:?}");
+        }
+        for hostile in [
+            "", "afterok", "afterok:", "afterok:abc", "afterok:12_x", "beforeok:1",
+            "singleton:3", "afterok:1 afterok:2", "afterok:1; rm -rf /", "afterok:1\nsecond",
+        ] {
+            assert!(
+                parse_overrides(Some(&serde_json::json!({"dependency": hostile}))).is_err(),
+                "accepted dependency {hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dependency_override_rewrites_long_and_attached_spellings() {
+        let overrides = BTreeMap::from([("dependency".into(), "afterok:123".into())]);
+
+        let script = b"#!/bin/bash\n#SBATCH --dependency=afterok:999\n#SBATCH --partition=cpu\necho hi\n";
+        let result = String::from_utf8(apply_schedule_overrides(script, &overrides)).unwrap();
+        assert!(result.contains("#SBATCH --dependency=afterok:123\n"), "{result}");
+        assert!(!result.contains("afterok:999"), "{result}");
+        assert!(result.contains("#SBATCH --partition=cpu\n"), "{result}");
+        assert!(result.contains("echo hi\n"), "{result}");
+
+        let attached = apply_schedule_overrides(
+            b"#!/bin/sh\n#SBATCH -dafterok:999\nsleep 1\n",
+            &overrides,
+        );
+        let attached = String::from_utf8(attached).unwrap();
+        assert!(!attached.contains("afterok:999"), "{attached}");
+        assert!(attached.contains("#SBATCH --dependency=afterok:123\n"), "{attached}");
         assert!(attached.contains("sleep 1"), "{attached}");
     }
 

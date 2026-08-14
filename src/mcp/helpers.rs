@@ -124,6 +124,47 @@ pub(super) fn script_id(script: &bank::Script) -> String {
     format!("{}/{}", script.bank, script.relative.display())
 }
 
+/// The result-file globs a job's batch script declared via `#SLURM_LOG-RESULT:`
+/// markers, resolved through recorded provenance. The producer hash recorded
+/// at MCP submission or adoption is the primary binding; the job name is a
+/// secondary match. When neither resolves to an eligible configured script,
+/// the job has no declared results and reading fails closed.
+pub(super) fn declared_results_for_job(
+    config: &Config,
+    cluster: &str,
+    job: &crate::model::Job,
+) -> Result<Vec<String>> {
+    let (scripts, _) = bank::configured_scripts_fresh(config)?;
+    let target = config.cluster(cluster)?;
+    let eligible = |script: &bank::Script| {
+        bank::supports_cluster(script, cluster)
+            && bank::validate_script_controller(script, target).is_ok()
+    };
+    if let Some(hash) = crate::state::Ledger::producer_hash(&config.state_path, cluster, &job.id) {
+        let mut by_hash = scripts
+            .iter()
+            .filter(|script| eligible(script) && sha256(&script.bytes) == hash);
+        if let Some(script) = by_hash.next()
+            && by_hash.next().is_none()
+        {
+            return Ok(script.declared_results.clone());
+        }
+    }
+    let mut by_name = scripts
+        .iter()
+        .filter(|script| eligible(script) && script.name == job.name);
+    let first = by_name
+        .next()
+        .context("no configured script records this job, so it has no declared results")?;
+    if by_name.next().is_some() {
+        bail!(
+            "multiple configured scripts share the job name {name:?}",
+            name = job.name
+        );
+    }
+    Ok(first.declared_results.clone())
+}
+
 pub(super) fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -286,6 +327,7 @@ mod tests {
             name: "train".into(),
             directives: vec!["--job-name=train".into()],
             origin: Some("alpha".into()),
+            declared_results: Vec::new(),
             bytes: b"#!/bin/sh\n".to_vec(),
         };
         assert_eq!(script_id(&script), "Bank/train.sbatch");

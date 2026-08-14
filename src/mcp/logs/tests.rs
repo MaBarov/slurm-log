@@ -72,6 +72,15 @@ fn diagnosis_classifies_every_supported_failure_family() {
         ..crate::model::Job::default()
     };
     assert!(classes(&findings(Some(&timeout), None, &log, "")).contains(&"slurm_timeout"));
+
+    let cancelled = crate::model::Job {
+        state: "CANCELLED".into(),
+        ..crate::model::Job::default()
+    };
+    assert!(classes(&findings(Some(&cancelled), None, &log, "")).contains(&"job_cancelled"));
+
+    let environment = "ModuleNotFoundError: No module named 'torch'\n";
+    assert!(classes(&findings(None, None, &log, environment)).contains(&"environment_setup"));
 }
 
 #[test]

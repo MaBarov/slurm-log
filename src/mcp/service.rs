@@ -44,6 +44,7 @@ impl McpServer {
             "slurm_wait_job" => self.wait_job(&args),
             "slurm_explain_pending" => self.explain_pending(&args),
             "slurm_find_artifact" => self.find_artifact(&args),
+            "slurm_read_declared_result" => self.read_declared_result(&args),
             "slurm_stage_bundle" => self.stage_bundle(&args, client),
             "slurm_adopt_job" => self.adopt_job(&args, client),
             "slurm_preflight_job" => self.preflight_job(&args, client),

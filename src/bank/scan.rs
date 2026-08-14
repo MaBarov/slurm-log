@@ -96,6 +96,7 @@ fn scan_direct(root: &Path) -> Result<(Vec<Script>, Vec<String>)> {
                 name,
                 directives,
                 origin: None,
+                declared_results: parse_declared_results(&bytes),
                 bytes,
             });
         }
@@ -130,6 +131,40 @@ fn has_terminal_control(value: &str) -> bool {
     value
         .chars()
         .any(|character| character.is_control() || character == '\x1b')
+}
+
+/// Marker a batch script uses to declare the result files it may produce,
+/// relative to the cluster working directory. Anything else the script
+/// writes is not a declared result and cannot be read through the MCP
+/// declared-result surface.
+const DECLARED_RESULT_MARKER: &str = "#SLURM_LOG-RESULT:";
+
+/// Extract basename globs declared with `#SLURM_LOG-RESULT: <glob>` comment
+/// lines. Patterns are restricted to a single path component of at most 128
+/// glob characters; slashes, whitespace, control characters, and duplicate
+/// declarations are rejected or ignored.
+fn parse_declared_results(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut results = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim_start().strip_prefix(DECLARED_RESULT_MARKER) else {
+            continue;
+        };
+        let pattern = rest.trim();
+        if pattern.is_empty()
+            || pattern.len() > 128
+            || pattern.contains('/')
+            || pattern.contains('\\')
+            || !pattern
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._?*-".contains(&byte))
+            || results.iter().any(|existing| existing == pattern)
+        {
+            continue;
+        }
+        results.push(pattern.to_string());
+    }
+    results
 }
 
 #[derive(Deserialize, Serialize)]

@@ -178,6 +178,7 @@ fn script_origin_uses_cluster_prefixes_and_keeps_ambiguous_files_shared() {
         name: "job".into(),
         directives: Vec::new(),
         origin: None,
+        declared_results: Vec::new(),
         bytes: Vec::new(),
     };
     assert_eq!(
@@ -203,6 +204,7 @@ fn submit_confirmation_uses_crlf_for_every_terminal_line() {
         name: "train".into(),
         directives: vec!["--gpus=2".into(), "--time=1:00:00".into()],
         origin: None,
+        declared_results: Vec::new(),
         bytes: Vec::new(),
     };
     let text = submit_confirmation(&script, &config.clusters[0]);
@@ -239,6 +241,7 @@ fn bank_rows_cover_nested_expansion_cluster_filtering_and_search() {
         name: path.into(),
         directives: Vec::new(),
         origin: origin.map(str::to_string),
+        declared_results: Vec::new(),
         bytes: Vec::new(),
     };
     let scripts = vec![
@@ -317,6 +320,7 @@ fn private_bank_cache_round_trips_without_changing_payload() {
             name: "run".into(),
             directives: vec!["--gpus=1".into()],
             origin: None,
+            declared_results: Vec::new(),
             bytes: b"#!/bin/sh\n".to_vec(),
         }],
         warnings: Vec::new(),
@@ -389,6 +393,7 @@ fn loads_twenty_thousand_cached_scripts_within_budget() {
                 name: format!("job-{id}"),
                 directives: vec!["--time=1:00:00".into()],
                 origin: None,
+                declared_results: Vec::new(),
                 bytes: b"#!/bin/sh\n#SBATCH --time=1:00:00\n".to_vec(),
             })
             .collect(),
@@ -414,6 +419,7 @@ fn builds_twenty_thousand_bank_rows_within_budget() {
             name: format!("job-{index}"),
             directives: Vec::new(),
             origin: None,
+            declared_results: Vec::new(),
             bytes: Vec::new(),
         })
         .collect();

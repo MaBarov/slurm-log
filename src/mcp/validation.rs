@@ -63,6 +63,11 @@ pub fn tool_arguments(name: &str, args: &JsonObject) -> Result<()> {
             strings(args, &[("search_root", 512)])?;
             integer(args, "max_bytes", 1, 262144)
         }
+        "slurm_read_declared_result" => {
+            job(args, &["result", "search_root", "max_bytes"])?;
+            strings(args, &[("result", 128), ("search_root", 512)])?;
+            integer(args, "max_bytes", 1, 262144)
+        }
         "slurm_stage_bundle" => {
             keys(args, &["bank", "entries", "destination", "version"])?;
             strings(args, &[("bank", 48), ("destination", 16), ("version", 8)])?;
@@ -119,8 +124,8 @@ pub fn tool_arguments(name: &str, args: &JsonObject) -> Result<()> {
                 let object = overrides
                     .as_object()
                     .with_context(|| "schedule_overrides must be an object")?;
-                if object.len() > 11 {
-                    bail!("schedule_overrides exceeds 11 keys");
+                if object.len() > 12 {
+                    bail!("schedule_overrides exceeds 12 keys");
                 }
                 for (key, value) in object {
                     if !crate::bank::SCHEDULE_OVERRIDE_KEYS.contains(&key.as_str()) {
@@ -129,7 +134,11 @@ pub fn tool_arguments(name: &str, args: &JsonObject) -> Result<()> {
                     let value = value
                         .as_str()
                         .with_context(|| format!("schedule override {key} must be a string"))?;
-                    let maximum = if key == "gres" { 256 } else { 128 };
+                    let maximum = if key == "gres" || key == "dependency" {
+                        256
+                    } else {
+                        128
+                    };
                     if value.is_empty() || value.len() > maximum {
                         bail!("schedule override {key} must be 1..{maximum} bytes");
                     }

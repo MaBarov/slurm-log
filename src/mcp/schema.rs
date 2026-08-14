@@ -147,7 +147,7 @@ pub fn tools(config: &Config) -> Vec<Tool> {
         ),
         read_tool(
             "slurm_find_artifact",
-            "Safely search the configured local working directory of an exact owner-scoped job for result artifacts matching a declared filename pattern; content is bounded, MIME-sniffed, and confined beneath the configured root.",
+            "Safely search the configured local working directory of an exact owner-scoped job for result artifacts matching a filename pattern the job's batch script declared via #SLURM_LOG-RESULT markers; content is bounded, MIME-sniffed, and confined beneath the configured root.",
             object(
                 BTreeMap::from([
                     ("cluster", exact.clone()),
@@ -163,6 +163,23 @@ pub fn tools(config: &Config) -> Vec<Tool> {
                     ("max_bytes", bounded_integer(1, 262144, 262144)),
                 ]),
                 &["cluster", "job_id", "pattern"],
+            ),
+        ),
+        read_tool(
+            "slurm_read_declared_result",
+            "Read the job-declared result files (for example cpu_gate.json or verifier receipts) of an exact owner-scoped job. Only basename globs the batch script declared via #SLURM_LOG-RESULT markers are readable; the requested result must exactly match one of them. Content is bounded, MIME-sniffed, and confined beneath the configured local working directory.",
+            object(
+                BTreeMap::from([
+                    ("cluster", exact.clone()),
+                    ("job_id", job_id()),
+                    ("result", json!({"type":"string","maxLength":128})),
+                    (
+                        "search_root",
+                        json!({"type":"string","maxLength":512,"default":"."}),
+                    ),
+                    ("max_bytes", bounded_integer(1, 262144, 262144)),
+                ]),
+                &["cluster", "job_id"],
             ),
         ),
         mutation_tool(
@@ -237,7 +254,7 @@ pub fn tools(config: &Config) -> Vec<Tool> {
                         "schedule_overrides",
                         json!({
                             "type":"object",
-                            "maxProperties":11,
+                            "maxProperties":12,
                             "additionalProperties":false,
                             "properties": {
                                 "partition": {"type":"string","maxLength":128},
@@ -250,7 +267,8 @@ pub fn tools(config: &Config) -> Vec<Tool> {
                                 "qos": {"type":"string","maxLength":128},
                                 "account": {"type":"string","maxLength":128},
                                 "constraint": {"type":"string","maxLength":128},
-                                "exclude": {"type":"string","maxLength":128}
+                                "exclude": {"type":"string","maxLength":128},
+                                "dependency": {"type":"string","maxLength":256}
                             }
                         }),
                     ),

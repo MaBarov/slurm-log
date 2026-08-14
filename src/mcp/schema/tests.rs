@@ -21,7 +21,7 @@ fn schemas_are_object_rooted_and_mutations_are_not_read_only() {
         }],
     };
     let tools = tools(&config);
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 21);
     for tool in &tools {
         assert_eq!(
             tool.input_schema.get("type").and_then(Value::as_str),

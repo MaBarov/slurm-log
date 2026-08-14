@@ -141,7 +141,7 @@ pub fn unregister(_config: &Config) -> Result<()> {
 pub fn doctor(config: &Config) -> Result<()> {
     config.validate().context("configuration")?;
     let tools = super::schema::tools(config);
-    if tools.len() != 20 || tools.iter().any(|tool| tool.output_schema.is_none()) {
+    if tools.len() != 21 || tools.iter().any(|tool| tool.output_schema.is_none()) {
         bail!("MCP tool schema validation failed");
     }
     let (_, warnings) = bank::configured_scripts_fresh(config).context("scan sbatch banks")?;

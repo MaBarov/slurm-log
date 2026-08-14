@@ -121,12 +121,18 @@ impl McpServer {
 
     pub(crate) fn find_artifact(&self, args: &JsonObject) -> Result<Value> {
         let (cluster, id) = exact_job(&self.config, args)?;
-        crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
+        let job = crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
         let target = self.config.cluster(cluster)?;
         if target.remote() {
             bail!("artifact search requires a local cluster working directory");
         }
         let pattern = required_string(args, "pattern")?;
+        let declared = super::helpers::declared_results_for_job(&self.config, cluster, &job)?;
+        if !declared.iter().any(|candidate| candidate == pattern) {
+            bail!(
+                "pattern {pattern:?} is not declared by the batch script of job {cluster}:{id}; declared results: {declared:?}"
+            );
+        }
         let search_root = optional_string(args, "search_root").unwrap_or(".");
         let subdir = super::artifact::validate_search_root(search_root)?;
         let content_max = optional_usize(args, "max_bytes", super::artifact::MAX_ARTIFACT_CONTENT)?
@@ -140,10 +146,71 @@ impl McpServer {
             "root": target.working_directory.display().to_string(),
             "search_root": search_root,
             "pattern": pattern,
+            "declared_results": declared,
             "matches": result.matches,
             "total": result.matches.len(),
             "scanned_entries": result.scanned,
             "truncated": result.truncated,
+            "max_content_bytes": content_max,
+        }))
+    }
+
+    pub(crate) fn read_declared_result(&self, args: &JsonObject) -> Result<Value> {
+        let (cluster, id) = exact_job(&self.config, args)?;
+        let job = crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
+        let target = self.config.cluster(cluster)?;
+        if target.remote() {
+            bail!("declared-result reading requires a local cluster working directory");
+        }
+        let declared = super::helpers::declared_results_for_job(&self.config, cluster, &job)?;
+        if declared.is_empty() {
+            bail!(
+                "job {cluster}:{id} declares no result files; add #SLURM_LOG-RESULT markers to its batch script"
+            );
+        }
+        let wanted = optional_string(args, "result");
+        let patterns: Vec<&str> = match wanted {
+            Some(value) => vec![
+                declared
+                    .iter()
+                    .find(|pattern| pattern.as_str() == value)
+                    .with_context(|| {
+                        format!("{value:?} is not a declared result of job {cluster}:{id}")
+                    })?
+                    .as_str(),
+            ],
+            None => declared.iter().map(String::as_str).collect(),
+        };
+        let search_root = optional_string(args, "search_root").unwrap_or(".");
+        let subdir = super::artifact::validate_search_root(search_root)?;
+        let content_max = optional_usize(args, "max_bytes", super::artifact::MAX_ARTIFACT_CONTENT)?
+            .clamp(1, super::artifact::MAX_ARTIFACT_CONTENT);
+        let mut matches = Vec::new();
+        let mut scanned = 0_usize;
+        let mut truncated = false;
+        for pattern in patterns {
+            let result =
+                super::artifact::search(&target.working_directory, &subdir, pattern, content_max)?;
+            scanned = scanned.saturating_add(result.scanned);
+            truncated |= result.truncated;
+            matches.extend(result.matches);
+            if truncated {
+                break;
+            }
+        }
+        Ok(json!({
+            "ok": true,
+            "cluster": cluster,
+            "job_id": id,
+            "job_name": job.name,
+            "declared_results": declared,
+            "requested": wanted,
+            "root": target.working_directory.display().to_string(),
+            "search_root": search_root,
+            "matches": matches,
+            "total": matches.len(),
+            "scanned_entries": scanned,
+            "truncated": truncated,
             "max_content_bytes": content_max,
         }))
     }
@@ -251,6 +318,7 @@ impl McpServer {
                 name: probe_name.clone(),
                 directives: Vec::new(),
                 origin: None,
+                declared_results: Vec::new(),
                 bytes,
             };
             let job = bank::submit(&config, &probe, cluster)?;
