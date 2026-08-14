@@ -238,6 +238,7 @@ fn parses_one_hundred_thousand_accounting_rows_within_budget() {
     let jobs = parse_recent(&input, "cispa");
     let elapsed = started.elapsed();
     assert_eq!(jobs.len(), 100_000);
+    #[cfg(not(coverage))]
     assert!(elapsed < Duration::from_millis(500));
     eprintln!("parse 100k accounting rows: {elapsed:?}");
 }
@@ -432,6 +433,7 @@ fn decodes_fifty_thousand_cached_jobs_within_budget() {
     let decoded = cached_jobs(&path, Duration::from_secs(60)).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(decoded.len(), jobs.len());
+    #[cfg(not(coverage))]
     assert!(elapsed < Duration::from_millis(250));
     eprintln!("decode 50k cached jobs: {elapsed:?}");
 }

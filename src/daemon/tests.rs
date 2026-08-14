@@ -233,6 +233,7 @@ fn sparse_filter_does_not_clone_an_entire_large_snapshot() {
     let filtered = filtered_reply(&reply, "sprint", "running");
     let optimized = started.elapsed();
     assert_eq!(filtered.jobs.len(), 1_000);
+    #[cfg(not(coverage))]
     assert!(optimized < Duration::from_millis(100));
 
     // Retain the former clone-everything approach as an offline benchmark
@@ -245,6 +246,7 @@ fn sparse_filter_does_not_clone_an_entire_large_snapshot() {
         .retain(|job| job.cluster == "sprint" && job.running());
     let baseline_elapsed = baseline_started.elapsed();
     assert_eq!(baseline.jobs.len(), filtered.jobs.len());
+    #[cfg(not(coverage))]
     assert!(optimized < baseline_elapsed);
     eprintln!("sparse archive filter: optimized={optimized:?}, clone-all={baseline_elapsed:?}");
 }
@@ -336,6 +338,7 @@ fn binary_protocol_handles_large_archive_within_budget() {
     let payload: Reply = rmp_serde::from_slice(&encoded[4..]).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(payload.jobs.len(), 10_000);
+    #[cfg(not(coverage))]
     assert!(elapsed < Duration::from_millis(100));
     eprintln!("binary round trip 10k jobs: {elapsed:?}");
 }
@@ -385,7 +388,9 @@ fn borrowed_daemon_reply_avoids_cloning_large_ledger() {
             .len(),
         1_000
     );
+    #[cfg(not(coverage))]
     assert!(borrowed_elapsed < Duration::from_millis(150));
+    #[cfg(not(coverage))]
     assert!(borrowed_elapsed < baseline_elapsed);
     eprintln!(
         "daemon filtered reply: borrowed={borrowed_elapsed:?}, clone-first={baseline_elapsed:?}"

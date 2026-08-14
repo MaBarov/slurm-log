@@ -405,6 +405,7 @@ fn loads_twenty_thousand_cached_scripts_within_budget() {
     let cached = load_bank_cache(&config, &root).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(cached.scripts.len(), 20_000);
+    #[cfg(not(coverage))]
     assert!(elapsed < Duration::from_millis(150));
     eprintln!("load 20k cached scripts: {elapsed:?}");
 }
@@ -440,7 +441,9 @@ fn builds_twenty_thousand_bank_rows_within_budget() {
     let started = std::time::Instant::now();
     assert_eq!(index.rows(&scripts, &expanded, "", "local").len(), 20_101);
     let elapsed = started.elapsed();
+    #[cfg(not(coverage))]
     assert!(index_elapsed < std::time::Duration::from_millis(100));
+    #[cfg(not(coverage))]
     assert!(elapsed < std::time::Duration::from_millis(20));
     eprintln!("index 20k scripts once: {index_elapsed:?}; rebuild rows: {elapsed:?}");
 }

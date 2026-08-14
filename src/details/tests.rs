@@ -392,6 +392,7 @@ fn parses_large_accounting_snapshot_within_budget() {
     let parsed = parse_accounting(&input, "cispa", "42").unwrap();
     let elapsed = started.elapsed();
     assert_eq!(parsed.max_rss_bytes, 1024 * 1024 * 1024);
+    #[cfg(not(coverage))]
     assert!(elapsed < Duration::from_millis(75));
     eprintln!("parse 5k detail rows: {elapsed:?}");
 }
