@@ -32,7 +32,7 @@ binary=$CARGO_TARGET_DIR/release/slurm-log
 for name in package_smoke offline_hostile follower_paths pane_close interactive_pane details_pane details_direct \
     focus_toast cli_surface picker_controls daemon_integration \
     workspace_controls reconcile_paths bank_actions bank_ui cluster_tabs degraded_clusters \
-    smart_close setup_wizard mcp_server mcp_setup mutation_bindings mcp_owner_isolation; do
+    smart_close setup_wizard mcp_server mcp_tools mcp_setup mutation_bindings mcp_owner_isolation; do
     printf '==> integration: %s\n' "$name"
     if [ "$name" = package_smoke ]; then
         # This test deliberately switches between test-key and production-key
