@@ -196,7 +196,10 @@ fn fallback_samples_skip_empty_names_and_report_overflow() {
         "slurm_diagnose_job",
         &json!({"ok":true, "findings":[{"classification":"cuda_out_of_memory"}]}),
     );
-    assert!(findings.contains("finding: cuda_out_of_memory"), "{findings}");
+    assert!(
+        findings.contains("finding: cuda_out_of_memory"),
+        "{findings}"
+    );
 }
 
 #[test]
@@ -231,10 +234,19 @@ fn script_stale_requires_a_valid_indexed_time_and_a_present_file() {
     assert!(!script_stale(&script, Some(&&missing)));
 
     std::fs::write(&path, b"#!/bin/sh\n").unwrap();
-    assert!(script_stale(&script, Some(&&missing)), "modified after indexing");
+    assert!(
+        script_stale(&script, Some(&&missing)),
+        "modified after indexing"
+    );
     let future = meta(Some("2099-01-01T00:00:00Z".into()));
-    assert!(!script_stale(&script, Some(&&future)), "indexed after modification");
-    assert!(!script_stale(&script, None), "absent bank metadata is not stale");
+    assert!(
+        !script_stale(&script, Some(&&future)),
+        "indexed after modification"
+    );
+    assert!(
+        !script_stale(&script, None),
+        "absent bank metadata is not stale"
+    );
 }
 
 #[test]
@@ -292,7 +304,9 @@ fn declared_results_reject_duplicate_job_names_across_scripts() {
     let error =
         declared_results_for_job(&config, "alpha", &job("alpha", "7", "shared-name")).unwrap_err();
     assert!(
-        error.to_string().contains("multiple configured scripts share"),
+        error
+            .to_string()
+            .contains("multiple configured scripts share"),
         "{error:#}"
     );
 }
