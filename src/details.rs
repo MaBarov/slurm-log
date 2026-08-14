@@ -148,3 +148,5 @@ include!("details/render.rs");
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_extra;

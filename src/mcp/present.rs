@@ -77,11 +77,11 @@ pub(super) fn fallback_text(name: &str, value: &Value) -> String {
 
 fn first_matches(name: &str, value: &Value) -> Option<String> {
     let (list, field, label) = match name {
-        "slurm_list_jobs" => ("jobs", Some("name"), "job"),
-        "slurm_list_scripts" => ("scripts", Some("job_name"), "script"),
-        "slurm_list_clusters" => ("clusters", Some("name"), "cluster"),
-        "slurm_search_log" => ("matches", Some("text"), "match"),
-        "slurm_diagnose_job" => ("findings", Some("classification"), "finding"),
+        "slurm_list_jobs" => ("jobs", "name", "job"),
+        "slurm_list_scripts" => ("scripts", "job_name", "script"),
+        "slurm_list_clusters" => ("clusters", "name", "cluster"),
+        "slurm_search_log" => ("matches", "text", "match"),
+        "slurm_diagnose_job" => ("findings", "classification", "finding"),
         _ => return None,
     };
     let items = value.get(list)?.as_array()?;
@@ -91,13 +91,11 @@ fn first_matches(name: &str, value: &Value) -> Option<String> {
     let names = items
         .iter()
         .take(5)
-        .map(|item| match field {
-            Some(field) => item
-                .get(field)
+        .map(|item| {
+            item.get(field)
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-                .to_string(),
-            None => item.as_str().unwrap_or_default().to_string(),
+                .to_string()
         })
         .map(|name| {
             name.lines()

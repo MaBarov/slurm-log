@@ -244,3 +244,17 @@ fn no_op_sync_of_twenty_thousand_jobs_avoids_rewrite_within_budget() {
     assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
     eprintln!("no-op sync 20k jobs: {elapsed:?}");
 }
+
+#[test]
+fn ledger_update_creates_missing_parent_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested/deep/state.json");
+    let failed = Job {
+        cluster: "cispa".into(),
+        id: "9".into(),
+        state: "FAILED".into(),
+        ..Job::default()
+    };
+    Ledger::dismiss(&path, &[failed]).unwrap();
+    assert!(path.exists());
+}

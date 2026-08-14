@@ -49,3 +49,18 @@ fn schemas_are_object_rooted_and_mutations_are_not_read_only() {
         Some(true)
     );
 }
+
+#[test]
+fn tool_pagination_emits_a_cursor_only_when_a_next_page_exists() {
+    let template = base_tool("tool", "dummy", object(BTreeMap::new(), &[]));
+    let tools: Vec<Tool> = std::iter::repeat_n(template, 51).collect();
+    let first = paginate_tools(&tools, None).unwrap();
+    assert_eq!(first.tools.len(), 50);
+    assert_eq!(first.next_cursor.as_deref(), Some("t:50"));
+    let cursor_request =
+        |cursor: &str| serde_json::from_value(json!({ "cursor": cursor })).unwrap();
+    let second = paginate_tools(&tools, Some(cursor_request("t:50"))).unwrap();
+    assert_eq!(second.tools.len(), 1);
+    assert!(second.next_cursor.is_none());
+    assert!(paginate_tools(&tools, Some(cursor_request("bad"))).is_err());
+}
