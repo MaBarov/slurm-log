@@ -86,6 +86,9 @@ include!("bank/bundle.rs");
 include!("bank/ui.rs");
 
 #[cfg(test)]
+#[path = "bank/tests/bundle.rs"]
+mod bundle_tests;
+#[cfg(test)]
 #[path = "bank/tests/edge.rs"]
 mod edge_tests;
 #[cfg(test)]

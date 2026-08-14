@@ -46,7 +46,7 @@ run_check coverage-syntax sh -n "$project_dir/coverage.sh"
 for test_script in package_smoke offline_hostile follower_paths pane_close interactive_pane \
     details_pane details_direct focus_toast cli_surface picker_controls daemon_integration \
     workspace_controls reconcile_paths feature_coverage bank_actions bank_ui cluster_tabs \
-    degraded_clusters smart_close setup_wizard mcp_server mcp_setup mutation_bindings \
+    degraded_clusters smart_close setup_wizard mcp_server mcp_tools mcp_setup mutation_bindings \
     mcp_owner_isolation source_layout release_workflow; do
     run_check "$test_script-syntax" sh -n "$project_dir/tests/$test_script.sh"
 done
@@ -73,6 +73,7 @@ run_check degraded_clusters "$project_dir/tests/degraded_clusters.sh"
 run_check smart_close "$project_dir/tests/smart_close.sh"
 run_check setup_wizard "$project_dir/tests/setup_wizard.sh"
 run_check mcp_server "$project_dir/tests/mcp_server.sh"
+run_check mcp_tools "$project_dir/tests/mcp_tools.sh"
 run_check mcp_setup sh "$project_dir/tests/mcp_setup.sh"
 run_check mutation_bindings "$project_dir/tests/mutation_bindings.sh"
 run_check mcp_owner_isolation "$project_dir/tests/mcp_owner_isolation.sh"
