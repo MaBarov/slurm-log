@@ -294,10 +294,10 @@ fn control_socket_path(host: &str) -> Option<std::path::PathBuf> {
         Duration::from_secs(5),
     )
     .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&out.stdout);
+    let raw = out
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout))?;
     let path = raw.lines().find_map(|line| {
         line.strip_prefix("controlpath ")
             .map(str::trim)

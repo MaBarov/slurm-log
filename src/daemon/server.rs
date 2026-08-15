@@ -1,8 +1,6 @@
 fn run(config: &Config) -> Result<()> {
     let (socket, lock_path) = paths(config);
-    if let Some(parent) = socket.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    fs::create_dir_all(socket.parent().unwrap_or(Path::new("")))?;
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)

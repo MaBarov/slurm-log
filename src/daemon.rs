@@ -6,7 +6,7 @@ use std::{
         fs::{OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,

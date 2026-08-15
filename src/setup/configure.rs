@@ -265,9 +265,7 @@ pub fn run(current: &Config) -> Result<()> {
     let value =
         json!({ "clusters": clusters, "sbatchBanks": sbatch_banks, "statePath": state_path });
     let path = config_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    fs::create_dir_all(path.parent().unwrap_or(Path::new("")))?;
     let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
     let mut file = OpenOptions::new()
         .create_new(true)

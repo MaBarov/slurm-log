@@ -116,3 +116,9 @@ fn terminal_lookup_rejects_bad_ids_and_unknown_clusters_before_process_spawn() {
     };
     assert_eq!(final_details(&config, &job), job);
 }
+
+#[test]
+fn bounded_jobs_deserializer_rejects_a_scalar_payload() {
+    let scalar = rmp_serde::to_vec(&42u64).unwrap();
+    assert!(rmp_serde::from_slice::<BoundedJobs>(&scalar).is_err());
+}

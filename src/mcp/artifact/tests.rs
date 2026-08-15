@@ -141,3 +141,10 @@ fn search_root_rejects_escapes_and_absolute_paths() {
         }
     }
 }
+
+#[test]
+fn text_content_advances_past_a_truncated_multibyte_character() {
+    let (text, truncated) = text_content("text/plain", "héllo".as_bytes(), 2).unwrap();
+    assert_eq!(text, "hé");
+    assert!(truncated);
+}

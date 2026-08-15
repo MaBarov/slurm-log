@@ -132,9 +132,7 @@ fn msgpack_sequence_len(bytes: &[u8]) -> Option<usize> {
 }
 
 fn query_lock(path: &Path) -> Result<fs::File> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    fs::create_dir_all(path.parent().unwrap_or(Path::new("")))?;
     let lock_path = path.with_extension("query.lock");
     let file = OpenOptions::new()
         .create(true)
@@ -148,9 +146,7 @@ fn query_lock(path: &Path) -> Result<fs::File> {
 }
 
 fn store_jobs(path: &Path, jobs: &[Job]) {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
+    let _ = fs::create_dir_all(path.parent().unwrap_or(Path::new("")));
     let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
     if OpenOptions::new()
         .create(true)

@@ -400,6 +400,7 @@ mod preflight_tests {
         for hostile in [
             "", "afterok", "afterok:", "afterok:abc", "afterok:12_x", "beforeok:1",
             "singleton:3", "afterok:1 afterok:2", "afterok:1; rm -rf /", "afterok:1\nsecond",
+            "afterok:123:",
         ] {
             assert!(
                 parse_overrides(Some(&serde_json::json!({"dependency": hostile}))).is_err(),
@@ -436,5 +437,36 @@ mod preflight_tests {
         let result = String::from_utf8(apply_schedule_overrides(script, &overrides)).unwrap();
         assert!(result.contains("echo unchanged\n"), "{result}");
         assert!(result.contains("#SBATCH --time=00:30:00\n"), "{result}");
+    }
+
+    #[test]
+    fn option_key_rejects_unknown_short_flags() {
+        assert_eq!(option_key("-p"), Some("partition"));
+        assert_eq!(option_key("-pgpu"), Some("partition"));
+        assert_eq!(option_key("-q"), None);
+        assert_eq!(option_key("-qfoo"), None);
+        assert_eq!(option_key("--unknown"), None);
+        assert_eq!(option_key("plain"), None);
+    }
+
+    #[test]
+    fn overrides_reject_more_keys_than_the_allowlist() {
+        let mut object = serde_json::Map::new();
+        for index in 0..=SCHEDULE_OVERRIDE_KEYS.len() {
+            object.insert(format!("key{index}"), serde_json::json!("value"));
+        }
+        assert!(parse_overrides(Some(&serde_json::Value::Object(object))).is_err());
+    }
+
+    #[test]
+    fn scheduling_request_skips_empty_and_irrelevant_keys() {
+        let (partition, gres) = scheduling_request(&directives(&[
+            "--time=01:00:00",
+            "--partition=",
+            "--gres=gpu:2",
+        ]))
+        .unwrap();
+        assert_eq!(partition, None);
+        assert_eq!(gres.as_deref(), Some("gpu:2"));
     }
 }
