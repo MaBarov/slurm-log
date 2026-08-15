@@ -141,15 +141,20 @@ pub fn unregister(_config: &Config) -> Result<()> {
 pub fn doctor(config: &Config) -> Result<()> {
     config.validate().context("configuration")?;
     let tools = super::schema::tools(config);
-    if tools.len() != 21 || tools.iter().any(|tool| tool.output_schema.is_none()) {
-        bail!("MCP tool schema validation failed");
-    }
+    validate_tool_schemas(&tools)?;
     let (_, warnings) = bank::configured_scripts_fresh(config).context("scan sbatch banks")?;
     daemon::ensure_running(config).context("private daemon access")?;
     println!("configuration: ok ({} cluster(s))", config.clusters.len());
     println!("tool schemas: ok ({} tools)", tools.len());
     println!("sbatch banks: ok ({} warning(s))", warnings.len());
     println!("private daemon: ok");
+    Ok(())
+}
+
+fn validate_tool_schemas(tools: &[rmcp::model::Tool]) -> Result<()> {
+    if tools.len() != 21 || tools.iter().any(|tool| tool.output_schema.is_none()) {
+        bail!("MCP tool schema validation failed");
+    }
     Ok(())
 }
 
@@ -255,6 +260,21 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["mcpServers"][SERVER_NAME]["type"], "stdio");
         assert_eq!(value["mcpServers"][SERVER_NAME]["args"], json!(["mcp"]));
+    }
+
+    #[test]
+    fn tool_schema_validation_rejects_an_incomplete_toolset() {
+        let config = Config {
+            local_user: String::new(),
+            remote_user: String::new(),
+            ssh_host: String::new(),
+            state_path: PathBuf::new(),
+            executable: PathBuf::from("slurm-log"),
+            sbatch_banks: Vec::new(),
+            clusters: Vec::new(),
+        };
+        assert!(validate_tool_schemas(&crate::mcp::schema::tools(&config)).is_ok());
+        assert!(validate_tool_schemas(&[]).is_err());
     }
 
     #[test]

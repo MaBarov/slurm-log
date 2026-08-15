@@ -54,6 +54,26 @@ fn exact_authorization_parsers_reject_foreign_rows() {
 }
 
 #[test]
+fn terminal_path_authorized_rejects_a_mismatched_authorization() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config {
+        local_user: "owner".into(),
+        remote_user: "owner".into(),
+        ssh_host: String::new(),
+        state_path: directory.path().join("state.json"),
+        executable: PathBuf::from("slurm-log"),
+        sbatch_banks: Vec::new(),
+        clusters: Vec::new(),
+    };
+    let authorized = Job {
+        cluster: "other".into(),
+        id: "42".into(),
+        ..Job::default()
+    };
+    assert!(terminal_path_authorized(&config, "local", "42", &authorized).is_err());
+}
+
+#[test]
 fn control_identity_rejects_mismatched_job_and_cluster() {
     let directory = tempfile::tempdir().unwrap();
     let config = Config {
