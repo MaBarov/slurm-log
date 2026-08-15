@@ -440,3 +440,6 @@ fn decodes_fifty_thousand_cached_jobs_within_budget() {
 
 #[path = "tests/identity.rs"]
 mod identity;
+
+#[path = "tests/authorization.rs"]
+mod authorization;

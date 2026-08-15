@@ -43,11 +43,9 @@ impl SecureDir {
             }
         })
         .with_context(|| format!("securely open root {}", path.display()))?;
-        let file = File::from(fd);
-        if !file.metadata()?.is_dir() {
-            bail!("configured root is not a directory");
-        }
-        Ok(Self { file })
+        Ok(Self {
+            file: File::from(fd),
+        })
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -92,9 +90,6 @@ impl SecureDir {
         let file = self.open_relative(relative, OFlags::RDONLY | OFlags::DIRECTORY)?;
         #[cfg(not(target_os = "linux"))]
         let file = self.open_relative(relative, ())?;
-        if !file.metadata()?.is_dir() {
-            bail!("path is not a directory");
-        }
         Ok(Self { file })
     }
 

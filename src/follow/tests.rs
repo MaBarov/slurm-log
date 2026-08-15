@@ -290,3 +290,10 @@ fn supervision_returns_shell_interrupt_status_without_polling_scheduler() {
     .unwrap();
     assert_eq!(code, 130);
 }
+
+#[test]
+fn monitor_render_skips_unchanged_frames() {
+    let mut previous = String::from("unchanged");
+    render_monitor("unchanged", &mut previous).unwrap();
+    assert_eq!(previous, "unchanged");
+}

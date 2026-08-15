@@ -55,10 +55,10 @@ fn parse_exact_queued_response(
     id: &str,
     owner: &str,
 ) -> Option<Job> {
-    for line in value.lines() {
+    value.lines().find_map(|line| {
         let fields: Vec<_> = line.split('|').map(str::trim).collect();
         if fields.len() != 10 || fields[0] != id || fields[1] != owner {
-            continue;
+            return None;
         }
         // Feed the existing bounded renderer parser its canonical nine-field
         // shape after ownership has been validated from the raw response.
@@ -66,13 +66,9 @@ fn parse_exact_queued_response(
             .chain(fields[2..].iter().copied())
             .collect::<Vec<_>>()
             .join("|");
-        if let Some(job) = parse_queue(&canonical, cluster).into_iter().next()
-            && job.id == id
-        {
-            return Some(job);
-        }
-    }
-    None
+        let job = parse_queue(&canonical, cluster).into_iter().next()?;
+        (job.id == id).then_some(job)
+    })
 }
 
 /// Fresh, exact sacct authorization for terminal jobs.  The user and cluster
@@ -103,25 +99,21 @@ fn parse_exact_accounting_response(
     owner: &str,
     expected_cluster: Option<&str>,
 ) -> Option<Job> {
-    for line in value.lines() {
+    value.lines().find_map(|line| {
         let fields: Vec<_> = line.split('|').map(str::trim).collect();
         if fields.len() != 11
             || fields[0] != id
             || fields[1] != owner
             || expected_cluster.is_some_and(|name| fields[10] != name)
         {
-            continue;
+            return None;
         }
         let canonical = [
             fields[0], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7],
             fields[8], fields[9],
         ]
         .join("|");
-        if let Some(job) = parse_recent(&canonical, cluster).into_iter().next()
-            && job.id == id
-        {
-            return Some(job);
-        }
-    }
-    None
+        let job = parse_recent(&canonical, cluster).into_iter().next()?;
+        (job.id == id).then_some(job)
+    })
 }
