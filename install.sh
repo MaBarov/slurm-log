@@ -93,11 +93,9 @@ esac
 
 [ -n "$remote_user" ] || remote_user=$local_user
 
-# A piped installer has the pipe on stdin; reattach to the terminal so the
-# setup wizard and PATH prompt stay interactive.
-if [ ! -t 0 ] && stty >/dev/null 2>&1 </dev/tty; then
-    exec </dev/tty
-fi
+# Piped installs keep reading the script from stdin; interactive reads use /dev/tty.
+have_tty=0
+if [ -t 0 ] || stty >/dev/null 2>&1 </dev/tty; then have_tty=1; fi
 
 validate_identity() {
     case "$1" in
@@ -413,9 +411,10 @@ else
 fi
 
 if [ "$run_setup" -eq 1 ]; then
-    if [ -t 0 ]; then
+    if [ "$have_tty" -eq 1 ]; then
         printf '\nStarting the setup wizard...\n\n'
-        "$prefix/bin/slurm-log" setup
+        if [ -t 0 ]; then "$prefix/bin/slurm-log" setup; else "$prefix/bin/slurm-log" setup </dev/tty; fi \
+            || printf '\nSetup did not finish; run %s/bin/slurm-log setup to retry.\n' "$prefix"
     else
         printf '\nSetup needs a terminal and was skipped. Run: %s/bin/slurm-log setup\n' "$prefix"
     fi
@@ -425,9 +424,11 @@ case ":${PATH}:" in
     *":$prefix/bin:"*) ;;
     *)
         printf '\n%s/bin is not currently on PATH.\n' "$prefix"
-        if [ "$path_update" -eq 1 ] && [ -t 0 ]; then
+        if [ "$path_update" -eq 1 ] && [ "$have_tty" -eq 1 ]; then
             printf 'Add it to ~/.bashrc now? [Y/n] '
-            read answer
+            # Ctrl-D keeps the [Y/n] default instead of aborting the script.
+            answer=
+            { [ -t 0 ] && read answer || read answer </dev/tty; } || true
             case "$answer" in
                 n|N|no|NO) ;;
                 *)
