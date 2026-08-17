@@ -1,10 +1,10 @@
 fn run() -> Result<()> {
     let args = parse_args()?;
-    if args.mode == "setup-discover-worker" {
-        return setup::run_discovery_worker(&args.targets);
-    }
-    if args.mode == "bank-scan-worker" {
-        return bank::run_scan_worker(&args.targets);
+    match args.mode.as_str() {
+        "setup-discover-worker" => return setup::run_discovery_worker(&args.targets),
+        "setup-roots-worker" => return setup::run_roots_worker(&args.targets),
+        "bank-scan-worker" => return bank::run_scan_worker(&args.targets),
+        _ => {}
     }
     if args.update_binary.is_some() && args.mode != "update" {
         bail!("--binary is only valid with `slurm-log update`");

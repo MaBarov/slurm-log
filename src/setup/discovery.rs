@@ -56,68 +56,6 @@ fn bank_kind(path: &Path) -> &'static str {
     }
 }
 
-fn suggested_workspace_roots(current: &Config) -> Vec<PathBuf> {
-    // Hermetic integration builds must not trigger host automounters while
-    // exercising setup with synthetic users. Production still probes the
-    // conventional per-user storage roots.
-    suggested_workspace_roots_with_host_storage(current, !cfg!(slurm_log_test_build))
-}
-
-fn suggested_workspace_roots_with_host_storage(
-    current: &Config,
-    probe_host_storage: bool,
-) -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut candidates = BTreeSet::new();
-    if let Some(path) = &home {
-        candidates.insert(path.clone());
-    }
-    for variable in ["SCRATCH", "WORK", "PROJECT_DIR", "PROJECTS"] {
-        if let Some(path) = std::env::var_os(variable).map(PathBuf::from)
-            && path.is_dir()
-        {
-            candidates.insert(path);
-        }
-    }
-    let mut identities = BTreeSet::from([current.local_user.as_str()]);
-    if let Some(name) = home
-        .as_deref()
-        .and_then(Path::file_name)
-        .and_then(|v| v.to_str())
-    {
-        identities.insert(name);
-    }
-    for identity in identities.iter().filter(|_| probe_host_storage) {
-        // `/storage` and `/storage1` are commonly aliases on cluster login
-        // nodes. Prefer `/storage1` so setup does not discover every repo twice
-        // or touch a stale compatibility mount.
-        let storage1 = Path::new("/storage1").join(identity);
-        if storage1.is_dir() {
-            candidates.insert(storage1);
-        } else {
-            let storage = Path::new("/storage").join(identity);
-            if storage.is_dir() {
-                candidates.insert(storage);
-            }
-        }
-        for parent in ["/scratch", "/work", "/data"] {
-            let path = Path::new(parent).join(identity);
-            if path.is_dir() {
-                candidates.insert(path);
-            }
-        }
-    }
-    candidates.into_iter().collect()
-}
-
-fn display_workspace_roots(roots: &[PathBuf]) -> String {
-    roots
-        .iter()
-        .map(|path| shell_words::quote(&path.display().to_string()).into_owned())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Find one bank per Git repository. Loose sbatch files are grouped under the
 /// search root, so users enter workspace roots rather than every script folder.
 fn discover_banks(roots: &[PathBuf]) -> (Vec<PathBuf>, bool) {
@@ -141,17 +79,6 @@ fn discover_banks_in_process(roots: &[PathBuf]) -> (Vec<PathBuf>, bool) {
     }
 
     collect_discovery(receiver, stop, DISCOVERY_TIME_LIMIT)
-}
-
-fn discovery_output_path() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "slurm-log-discovery-{}-{nonce}.jsonl",
-        std::process::id()
-    ))
 }
 
 fn read_discovery_output(path: &Path) -> (Vec<PathBuf>, bool) {
@@ -178,48 +105,27 @@ fn read_discovery_output(path: &Path) -> (Vec<PathBuf>, bool) {
 }
 
 fn discover_banks_subprocess(roots: &[PathBuf]) -> (Vec<PathBuf>, bool) {
-    let output = discovery_output_path();
-    let Ok(file) = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&output)
-    else {
+    discover_banks_subprocess_with(
+        &worker_output_path("discovery"),
+        std::env::current_exe().ok(),
+        roots,
+        DISCOVERY_TIME_LIMIT,
+    )
+}
+
+fn discover_banks_subprocess_with(
+    output: &Path,
+    executable: Option<PathBuf>,
+    roots: &[PathBuf],
+    time_limit: Duration,
+) -> (Vec<PathBuf>, bool) {
+    let ran = run_worker(output, executable, "setup-discover-worker", roots, time_limit);
+    if matches!(ran, WorkerRun::NotStarted) {
         return (Vec::new(), true);
-    };
-    drop(file);
-    let Ok(executable) = std::env::current_exe() else {
-        let _ = fs::remove_file(&output);
-        return (Vec::new(), true);
-    };
-    let mut command = Command::new(executable);
-    command
-        .arg("setup-discover-worker")
-        .arg(&output)
-        .args(roots)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let Ok(mut child) = command.spawn() else {
-        let _ = fs::remove_file(&output);
-        return (Vec::new(), true);
-    };
-    let started = Instant::now();
-    let timed_out = loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break false,
-            Ok(None) if started.elapsed() < DISCOVERY_TIME_LIMIT => {
-                thread::sleep(Duration::from_millis(20));
-            }
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                break true;
-            }
-        }
-    };
-    let (banks, worker_truncated) = read_discovery_output(&output);
-    let _ = fs::remove_file(&output);
-    (banks, timed_out || worker_truncated)
+    }
+    let (banks, worker_truncated) = read_discovery_output(output);
+    let _ = fs::remove_file(output);
+    (banks, matches!(ran, WorkerRun::TimedOut) || worker_truncated)
 }
 
 pub fn run_discovery_worker(arguments: &[String]) -> Result<()> {
@@ -227,7 +133,11 @@ pub fn run_discovery_worker(arguments: &[String]) -> Result<()> {
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("discovery output path required"))?;
     let output = Path::new(output);
-    let file = OpenOptions::new().append(true).mode(0o600).open(output)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(output)?;
     let (sender, receiver) = mpsc::channel();
     let writer = thread::spawn(move || {
         let mut file = file;
