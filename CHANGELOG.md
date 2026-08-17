@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- Fix the piped installer (`curl … | bash`) stalling on interactive terminals:
+  the installer redirected stdin to `/dev/tty`, which made the shell re-read
+  the rest of the script from the terminal. Interactive setup and the PATH
+  prompt now read from `/dev/tty` directly, so the script keeps reading from
+  the pipe. A failed wizard no longer swallows the install summary, and
+  Ctrl-D at the PATH prompt keeps the default instead of aborting.
+
 ## 0.3.0
 
 - Add twelve MCP tools that keep a run inside MCP end to end: `slurm_doctor`,
