@@ -109,6 +109,24 @@ fn bounded_input_command_reports_failures_and_output_overflow() {
 }
 
 #[test]
+fn deadline_and_cancellation_bail_out_of_a_blocked_command() {
+    let started = Instant::now();
+    let error = output_with_timeout("sleep", &["10"], Duration::from_millis(100)).unwrap_err();
+    assert!(format!("{error:#}").contains("exceeded"));
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let setter = Arc::clone(&cancel);
+    let trigger = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        setter.store(true, Ordering::Relaxed);
+    });
+    let error = with_cancellation(cancel, || output("sleep", &["10"])).unwrap_err();
+    assert!(format!("{error:#}").contains("cancelled"));
+    trigger.join().unwrap();
+}
+
+#[test]
 fn deadline_kills_descendants_that_hold_the_output_pipe() {
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("descendant.pid");

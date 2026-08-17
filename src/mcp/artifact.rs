@@ -117,9 +117,6 @@ fn read_match(
 ) -> Option<Value> {
     let file = directory.open_file(name).ok()?;
     let metadata = file.metadata().ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
     let expected = metadata.len();
     let mut value = json!({
         "path": relative.display().to_string(),

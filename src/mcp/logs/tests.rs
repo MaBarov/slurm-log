@@ -15,6 +15,12 @@ fn cursors_reject_wrong_shapes_and_tail_is_line_bounded() {
 }
 
 #[test]
+fn exception_output_is_capped_at_two_thousand_lines() {
+    let lines = vec!["Traceback (most recent call last):"; 2_100];
+    assert_eq!(exception_blocks(&lines).lines().count(), 2000);
+}
+
+#[test]
 fn exception_mode_keeps_complete_short_tracebacks() {
     let text = "noise\nTraceback (most recent call last):\n  File x\nValueError: bad\n\nnoise";
     let value = filter_text(text, "exceptions");

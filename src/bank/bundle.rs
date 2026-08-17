@@ -148,7 +148,7 @@ pub fn build_bundle(root: &Path, manifest: &[String]) -> Result<Bundle> {
     let mut total: u64 = 0;
     for path in &sorted {
         let relative = Path::new(path);
-        let file = base
+        let mut file = base
             .open_file(relative)
             .with_context(|| format!("open bundle entry {path}"))?;
         let metadata = file.metadata()?;
@@ -163,11 +163,7 @@ pub fn build_bundle(root: &Path, manifest: &[String]) -> Result<Bundle> {
             bail!("refusing bundle entry {path:?}: prohibited path component");
         }
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.take(MAX_ENTRY_BYTES.saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_ENTRY_BYTES {
-            bail!("bundle entry {path} exceeds {} MiB", MAX_ENTRY_BYTES / 1024 / 1024);
-        }
+        file.read_to_end(&mut bytes)?;
         if contains_secret_markers(&bytes) {
             bail!("refusing bundle entry {path:?}: private key material detected");
         }

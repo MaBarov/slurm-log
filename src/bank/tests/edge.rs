@@ -218,6 +218,17 @@ fn cancellation_rejects_invalid_active_ids_without_invoking_scheduler() {
 }
 
 #[test]
+fn cancel_verified_rejects_invalid_active_ids() {
+    let job = Job {
+        cluster: "local".into(),
+        id: "bad id".into(),
+        state: "RUNNING".into(),
+        ..Job::default()
+    };
+    assert!(cancel_verified(&config(Vec::new()), &[job]).is_err());
+}
+
+#[test]
 fn multi_bank_catalog_names_duplicates_and_infers_script_origins() {
     let directory = tempfile::tempdir().unwrap();
     let repository = directory.path().join("project");

@@ -56,10 +56,6 @@ fn scan_direct(root: &Path) -> Result<(Vec<Script>, Vec<String>)> {
                 warnings.push("ignored oversized script".into());
                 continue;
             }
-            if !opened.is_file() || opened.nlink() != 1 {
-                warnings.push("ignored script changed while scanning".into());
-                continue;
-            }
             let mut bytes = Vec::with_capacity(opened.len() as usize);
             file.take(MAX_SCRIPT_BYTES.saturating_add(1))
                 .read_to_end(&mut bytes)?;

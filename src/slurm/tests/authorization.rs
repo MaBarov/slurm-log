@@ -54,6 +54,35 @@ fn exact_authorization_parsers_reject_foreign_rows() {
 }
 
 #[test]
+fn terminal_path_authorized_fails_closed_without_accounting() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config {
+        local_user: "owner".into(),
+        remote_user: "owner".into(),
+        ssh_host: String::new(),
+        state_path: directory.path().join("state.json"),
+        executable: PathBuf::from("slurm-log"),
+        sbatch_banks: Vec::new(),
+        clusters: vec![crate::config::ClusterConfig {
+            name: "local".into(),
+            controller: None,
+            transport: "local".into(),
+            user: "owner".into(),
+            ssh_host: String::new(),
+            working_directory: directory.path().into(),
+            accounting: false,
+        }],
+    };
+    let authorized = Job {
+        cluster: "local".into(),
+        id: "42".into(),
+        ..Job::default()
+    };
+    let error = terminal_path_authorized(&config, "local", "42", &authorized).unwrap_err();
+    assert!(format!("{error:#}").contains("accounting is unavailable"));
+}
+
+#[test]
 fn terminal_path_authorized_rejects_a_mismatched_authorization() {
     let directory = tempfile::tempdir().unwrap();
     let config = Config {

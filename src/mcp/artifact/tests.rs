@@ -148,3 +148,57 @@ fn text_content_advances_past_a_truncated_multibyte_character() {
     assert_eq!(text, "hé");
     assert!(truncated);
 }
+
+#[test]
+fn search_caps_matches_at_the_match_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    fs::create_dir(&root).unwrap();
+    for index in 0..=MAX_MATCHES {
+        fs::write(root.join(format!("item-{index:04}.txt")), b"x").unwrap();
+    }
+    let result = search(&root, Path::new("."), "*.txt", 1024).unwrap();
+    assert_eq!(result.matches.len(), MAX_MATCHES);
+    assert!(result.truncated);
+}
+
+#[test]
+fn search_caps_total_result_bytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let chunk = b"x".repeat(512 * 1024);
+    for index in 0..4 {
+        fs::write(root.join(format!("blob-{index}.txt")), &chunk).unwrap();
+    }
+    let result = search(&root, Path::new("."), "*.txt", usize::MAX).unwrap();
+    assert!(result.matches.len() < 4);
+    assert!(result.truncated);
+}
+
+#[test]
+#[ignore = "release-mode performance budget"]
+fn search_marks_artifacts_larger_than_sixty_four_mib() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let file = fs::File::create(root.join("huge.txt")).unwrap();
+    file.set_len(MAX_ARTIFACT_SIZE + 1).unwrap();
+    let result = search(&root, Path::new("."), "huge.txt", 1024).unwrap();
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0]["oversized"], Value::Bool(true));
+}
+
+#[test]
+#[ignore = "release-mode performance budget"]
+fn search_caps_walked_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    fs::create_dir(&root).unwrap();
+    for index in 0..=MAX_WALK_ENTRIES {
+        fs::write(root.join(format!("walk-{index:06}")), b"x").unwrap();
+    }
+    let result = search(&root, Path::new("."), "*.missing", 1024).unwrap();
+    assert!(result.truncated);
+    assert_eq!(result.scanned, MAX_WALK_ENTRIES + 1);
+}

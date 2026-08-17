@@ -134,6 +134,88 @@ fn tree_fingerprint_is_none_for_non_directory_or_symlink() {
 }
 
 #[test]
+fn catalog_reports_indexed_at_for_a_cached_non_git_bank() {
+    let directory = tempdir_without_git_ancestor();
+    let root = directory.path().join("bank");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("job.sbatch"), b"#!/bin/sh\n").unwrap();
+    let mut config = config(vec![SbatchBankConfig {
+        path: root.clone(),
+        name: None,
+    }]);
+    config.state_path = directory.path().join("state/state.json");
+    let payload = ScanPayload {
+        name: "bank".into(),
+        scripts: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+    };
+    store_bank_cache(&config, &root, &payload);
+    let (_, _, meta) = catalog(&config, false).unwrap();
+    assert!(meta.indexed_at.is_some());
+}
+
+fn write_many_scripts(root: &Path, count: usize) {
+    for index in 0..count {
+        fs::write(root.join(format!("job-{index:06}.sbatch")), b"#!/bin/sh\n").unwrap();
+    }
+}
+
+#[test]
+#[ignore = "release-mode performance budget"]
+fn script_limit_is_reported_and_caps_scan_and_fingerprint() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("bank");
+    fs::create_dir(&root).unwrap();
+    write_many_scripts(&root, MAX_SCRIPTS + 1);
+    let (scripts, warnings) = scan_direct(&root).unwrap();
+    assert_eq!(scripts.len(), MAX_SCRIPTS);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("bank limited"))
+    );
+    assert!(bank_tree_fingerprint(&root).is_some());
+    let mut config = config(vec![SbatchBankConfig {
+        path: root,
+        name: None,
+    }]);
+    config.state_path = directory.path().join("state/state.json");
+    let (scripts, _, _) = catalog(&config, false).unwrap();
+    assert_eq!(scripts.len(), MAX_SCRIPTS);
+}
+
+#[test]
+#[ignore = "release-mode performance budget"]
+fn combined_bank_script_limit_truncates_the_second_bank() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    write_many_scripts(&first, 1);
+    write_many_scripts(&second, MAX_SCRIPTS);
+    let mut config = config(vec![
+        SbatchBankConfig {
+            path: first,
+            name: None,
+        },
+        SbatchBankConfig {
+            path: second,
+            name: None,
+        },
+    ]);
+    config.state_path = directory.path().join("state/state.json");
+    let (scripts, warnings, _) = catalog(&config, false).unwrap();
+    assert_eq!(scripts.len(), MAX_SCRIPTS);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("all banks combined are limited"))
+    );
+}
+
+#[test]
 fn store_bank_cache_is_noop_when_tree_fingerprint_is_none() {
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("not-a-directory");

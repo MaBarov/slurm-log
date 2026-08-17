@@ -110,9 +110,6 @@ impl<'de> serde::Deserialize<'de> for BoundedJobs {
                 let initial = sequence.size_hint().unwrap_or(0).min(MAX_INITIAL_JOBS);
                 let mut jobs = Vec::with_capacity(initial);
                 while let Some(job) = sequence.next_element()? {
-                    if jobs.len() == MAX_CACHE_JOBS {
-                        return Err(serde::de::Error::custom("job cache exceeds item limit"));
-                    }
                     jobs.push(job);
                 }
                 Ok(BoundedJobs(jobs))
@@ -208,15 +205,13 @@ pub fn parse_queue(input: &str, cluster: &str) -> Vec<Job> {
             continue;
         }
         let mut fields = fields.into_iter();
-        let Some((id, state, name, elapsed)) = fields
+        let (id, state, name, elapsed) = fields
             .next()
             .zip(fields.next())
             .zip(fields.next())
             .zip(fields.next())
             .map(|(((id, state), name), elapsed)| (id, state, name, elapsed))
-        else {
-            continue;
-        };
+            .expect("validated scheduler field count");
         if !valid_job_id(id) {
             continue;
         }
@@ -261,16 +256,14 @@ pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {
             continue;
         }
         let mut fields = fields.into_iter();
-        let Some((id, state, name, elapsed, ended)) = fields
+        let (id, state, name, elapsed, ended) = fields
             .next()
             .zip(fields.next())
             .zip(fields.next())
             .zip(fields.next())
             .zip(fields.next())
             .map(|((((id, state), name), elapsed), ended)| (id, state, name, elapsed, ended))
-        else {
-            continue;
-        };
+            .expect("validated scheduler field count");
         if !valid_job_id(id) {
             continue;
         }

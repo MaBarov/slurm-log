@@ -95,4 +95,7 @@ mod coverage_tests;
 #[path = "bank/tests/edge.rs"]
 mod edge_tests;
 #[cfg(test)]
+#[path = "bank/tests/preflight.rs"]
+mod preflight_tests;
+#[cfg(test)]
 mod tests;

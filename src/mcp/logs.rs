@@ -62,9 +62,6 @@ impl McpServer {
         let (cluster, id) = exact_job(&self.config, args)?;
         crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
         let pattern = required_string(args, "pattern")?;
-        if pattern.len() > 1024 {
-            bail!("pattern exceeds 1024 bytes");
-        }
         let regex = optional_bool(args, "regex").unwrap_or(false);
         let maximum = optional_usize(args, "max_matches", 100)?.clamp(1, 500);
         let context = optional_usize(args, "context_lines", 2)?.min(20);

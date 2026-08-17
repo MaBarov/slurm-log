@@ -98,6 +98,20 @@ printf '%s\n' "$tail_result" | grep -F 'plain first line' >/dev/null
 cursor=$(printf '%s\n' "$tail_result" | sed -n 's/.*"next_cursor":"\([^"]*\)".*/\1/p')
 test -n "$cursor"
 request '{"jsonrpc":"2.0","id":120,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"beta","job_id":"123","filter":"warnings"}}}' | grep -F 'hidden warning' >/dev/null
+# Remote metadata and range reads exercise the SSH helper's empty-body and
+# head/tail range protocol on top of the Window read above.
+beta_window=$(request '{"jsonrpc":"2.0","id":1201,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"beta","job_id":"123","filter":"all"}}}')
+printf '%s\n' "$beta_window" | grep -F 'plain first line' >/dev/null
+beta_cursor=$(printf '%s\n' "$beta_window" | sed -n 's/.*"next_cursor":"\([^"]*\)".*/\1/p')
+test -n "$beta_cursor"
+sleep 6
+beta_inc=$(request "{\"jsonrpc\":\"2.0\",\"id\":1202,\"method\":\"tools/call\",\"params\":{\"name\":\"slurm_read_log\",\"arguments\":{\"cluster\":\"beta\",\"job_id\":\"123\",\"cursor\":\"$beta_cursor\",\"filter\":\"all\"}}}")
+printf '%s\n' "$beta_inc" | grep -F '"status":"available"' >/dev/null
+# A failed remote log transfer maps to pending_log for an active job.
+touch "$MCP_LOG_SSH_FAIL"
+sleep 6
+request '{"jsonrpc":"2.0","id":1203,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"beta","job_id":"123"}}}' | grep -F '"status":"pending_log"' >/dev/null
+rm "$MCP_LOG_SSH_FAIL"
 request '{"jsonrpc":"2.0","id":121,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"124"}}}' | grep -F '"status":"pending_log"' >/dev/null
 request '{"jsonrpc":"2.0","id":122,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"125"}}}' | grep -F '"status":"no_stdout"' >/dev/null
 request '{"jsonrpc":"2.0","id":1220,"method":"tools/call","params":{"name":"slurm_read_log","arguments":{"cluster":"alpha","job_id":"123","filter":"bogus"}}}' | grep -F 'invalid log filter bogus' >/dev/null
@@ -136,6 +150,21 @@ request "{\"jsonrpc\":\"2.0\",\"id\":153,\"method\":\"tools/call\",\"params\":{\
 printf '%s\n' "$regex_search" | grep -F '"match_count":1' >/dev/null
 request '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"slurm_diagnose_job","arguments":{"cluster":"alpha","job_id":"123"}}}' | grep -F 'cuda_out_of_memory' >/dev/null
 
+# A dense log exercises the per-response output cap: enough matching lines to
+# overflow the search payload while the match count stays below the maximum,
+# so "limited" can only come from the output byte budget.
+padding=$(printf 'x%.0s' $(seq 1 1990))
+: >"$log_file"
+i=0
+while [ "$i" -lt 300 ]; do
+    printf 'NEEDLE %s\n' "$padding"
+    i=$((i + 1))
+done >>"$log_file"
+sleep 6
+capped=$(request '{"jsonrpc":"2.0","id":154,"method":"tools/call","params":{"name":"slurm_search_log","arguments":{"cluster":"alpha","job_id":"123","pattern":"NEEDLE","context_lines":0,"max_matches":500}}}')
+printf '%s\n' "$capped" | grep -F '"match_count":300' >/dev/null
+printf '%s\n' "$capped" | grep -F '"limited":true' >/dev/null
+
 # Artifact reads are bound to what the batch script declared, and the
 # declared-result reader exposes exactly those files (cpu_gate.json/verifier
 # receipts) under the same confinement.
@@ -151,6 +180,7 @@ request '{"jsonrpc":"2.0","id":1606,"method":"tools/call","params":{"name":"slur
 request '{"jsonrpc":"2.0","id":1607,"method":"tools/call","params":{"name":"slurm_read_declared_result","arguments":{"cluster":"beta","job_id":"123"}}}' | grep -F 'local cluster working directory' >/dev/null
 all_declared=$(request '{"jsonrpc":"2.0","id":1608,"method":"tools/call","params":{"name":"slurm_read_declared_result","arguments":{"cluster":"alpha","job_id":"123"}}}')
 printf '%s\n' "$all_declared" | grep -F '"requested":null' >/dev/null
+request '{"jsonrpc":"2.0","id":16081,"method":"tools/call","params":{"name":"slurm_read_declared_result","arguments":{"cluster":"alpha","job_id":"128"}}}' | grep -F 'declares no result files' >/dev/null
 request '{"jsonrpc":"2.0","id":1609,"method":"tools/call","params":{"name":"slurm_find_artifact","arguments":{"cluster":"alpha","job_id":"123","pattern":"cpu_gate.json","search_root":".."}}}' | grep -F 'search_root must be a relative path' >/dev/null
 request '{"jsonrpc":"2.0","id":1610,"method":"tools/call","params":{"name":"slurm_find_artifact","arguments":{"cluster":"alpha","job_id":"123","pattern":"cpu_gate.json","search_root":"././"}}}' | grep -F 'search_root must name a directory' >/dev/null
 
@@ -233,6 +263,11 @@ test -f "$state_dir/bundles/$bundle_sha.bundle"
 remote=$(request '{"jsonrpc":"2.0","id":1721,"method":"tools/call","params":{"name":"slurm_stage_bundle","arguments":{"bank":"Bank","entries":["data/epoch.json"]}}}')
 printf '%s\n' "$remote" | grep -F '"destination":"remote"' >/dev/null
 printf '%s\n' "$remote" | grep -F '~/.cache/slurm-log/bundles/' >/dev/null
+# A non-directory staging path surfaces the bundle staging error context.
+rm -rf "$state_dir/bundles"
+printf 'not a directory\n' >"$state_dir/bundles"
+request '{"jsonrpc":"2.0","id":17211,"method":"tools/call","params":{"name":"slurm_stage_bundle","arguments":{"bank":"Bank","entries":["data/epoch.json"],"destination":"local"}}}' | grep -F 'create bundle staging directory' >/dev/null
+rm -f "$state_dir/bundles"
 request '{"jsonrpc":"2.0","id":1722,"method":"tools/call","params":{"name":"slurm_stage_bundle","arguments":{"bank":"Nope","entries":["data/epoch.json"]}}}' | grep -F 'ambiguous or unknown' >/dev/null
 request '{"jsonrpc":"2.0","id":1723,"method":"tools/call","params":{"name":"slurm_stage_bundle","arguments":{"bank":"Bank","entries":["missing.txt"]}}}' | grep -F 'open bundle entry' >/dev/null
 request '{"jsonrpc":"2.0","id":1724,"method":"tools/call","params":{"name":"slurm_stage_bundle","arguments":{"bank":"Bank","entries":["credentials"]}}}' | grep -F 'prohibited path component' >/dev/null

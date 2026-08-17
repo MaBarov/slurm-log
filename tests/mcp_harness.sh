@@ -32,6 +32,12 @@ cat >"$test_root/bank/train.sbatch" <<'EOF'
 #SLURM_LOG-RESULT: verifier-receipt.txt
 printf never-executed
 EOF
+# A script with no declared result markers exercises the empty-result bail.
+cat >"$test_root/bank/plain.sbatch" <<'EOF'
+#!/bin/sh
+#SBATCH --job-name=plain
+printf never-executed
+EOF
 cp "$test_root/bank/train.sbatch" "$test_root/original.sbatch"
 printf '{"passed":true,"metrics":{"accuracy":0.97}}\n' >"$test_root/work/cpu_gate.json"
 # Non-sbatch files and symlinks must be skipped by the bank cache fingerprint.
@@ -65,6 +71,7 @@ case " $* " in
         printf '125|offline|RUNNING|no-stdout|00:01|node-c|cpu|2026-08-13T10:00:00|80|quiet.sbatch\n'
         printf '126|offline|RUNNING|outside-stdout|00:01|node-d|cpu|2026-08-13T10:00:00|70|outside.sbatch\n'
         printf '127|offline|RUNNING|array-master|00:01|node-a|gpu|2026-08-13T10:00:00|60|array.sbatch\n'
+        printf '128|offline|RUNNING|plain|00:01|node-e|cpu|2026-08-13T10:00:00|50|plain.sbatch\n'
         ;;
       *'|%u'*)
         printf '123|RUNNING|mcp-train|00:01|node-a|gpu|2026-08-13T10:00:00|100|train.sbatch|offline\n'
@@ -72,6 +79,7 @@ case " $* " in
         printf '125|RUNNING|no-stdout|00:01|node-c|cpu|2026-08-13T10:00:00|80|quiet.sbatch|offline\n'
         printf '126|RUNNING|outside-stdout|00:01|node-d|cpu|2026-08-13T10:00:00|70|outside.sbatch|offline\n'
         printf '127|RUNNING|array-master|00:01|node-a|gpu|2026-08-13T10:00:00|100|array.sbatch|offline\n'
+        printf '128|RUNNING|plain|00:01|node-e|cpu|2026-08-13T10:00:00|50|plain.sbatch|offline\n'
         ;;
       *) exit 42 ;;
     esac
@@ -88,6 +96,7 @@ cat >"$fake_bin/scontrol" <<'EOF'
 env | grep -Eq '^(SBATCH_|SCANCEL_|SLURM_CLUSTERS=)' && exit 41
 printf 'scontrol %s\n' "$*" >>"$MCP_CALLS"
 case "$*" in
+  *128*) printf 'JobId=128 UserId=offline(1000) JobName=plain JobState=RUNNING StdOut=%s\n' "$MCP_LOG_FILE" ;;
   *127*) printf 'JobId=127 UserId=offline(1000) JobName=array-master JobState=RUNNING ArrayJobId=127 ArrayTaskId=0-9\n' ;;
   *124*) printf 'JobId=124 UserId=offline(1000) JobName=pending-log JobState=RUNNING StdOut=%s/missing.log Dependency=afterok:42,afterany:43\n' "$(dirname "$MCP_LOG_FILE")" ;;
   *125*) printf 'JobId=125 UserId=offline(1000) JobName=no-stdout JobState=RUNNING StdOut=/dev/null\n' ;;
@@ -137,6 +146,7 @@ for remote do :; done
 printf 'ssh %s\n' "$remote" >>"$MCP_CALLS"
 case "$remote" in
   *'SLURMLOG|'*)
+    test -f "$MCP_LOG_SSH_FAIL" && exit 5
     size=$(wc -c <"$MCP_LOG_FILE")
     modified=$(stat -c %Y "$MCP_LOG_FILE")
     printf 'SLURMLOG|1|2|%s|%s\n' "$size" "$modified"
@@ -187,6 +197,7 @@ export MCP_QUEUE_OVERRIDE=$test_root/queue-override
 export MCP_TMUX_FAIL=$test_root/tmux-fail
 export MCP_TMUX_MALFORMED=$test_root/tmux-malformed
 export MCP_SSH_FAIL=$test_root/ssh-fail
+export MCP_LOG_SSH_FAIL=$test_root/log-ssh-fail
 export SBATCH_JOB_NAME=ambient-override
 export SCANCEL_FULL=1
 export SLURM_CLUSTERS=wrong-cluster
