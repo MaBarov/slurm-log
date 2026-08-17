@@ -103,6 +103,11 @@ jobs:
           name: release-unsigned
           path: ${{ runner.temp }}/slurm-log-release-signing/dist
 
+      - name: Stage the reviewed installer beside the signed set
+        run: |
+          set -euo pipefail
+          install -m 644 install.sh "$RUNNER_TEMP/slurm-log-release-signing/dist/install.sh"
+
       - name: Verify tag and archive, then sign without repository code
         env:
           SLURM_LOG_RELEASE_SIGNING_KEY_PEM: ${{ secrets.SLURM_LOG_RELEASE_SIGNING_KEY_PEM }}
@@ -155,7 +160,7 @@ jobs:
             ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.sha256
             ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.manifest
             ${{ runner.temp }}/slurm-log-release-signing/dist/slurm-log-linux-x86_64.tar.gz.manifest.sig
-            install.sh
+            ${{ runner.temp }}/slurm-log-release-signing/dist/install.sh
 
   publish:
     needs: [verify, sign]
