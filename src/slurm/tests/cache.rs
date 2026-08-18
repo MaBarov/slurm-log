@@ -1,4 +1,51 @@
-use super::super::*;
+use super::*;
+use std::fs;
+
+#[test]
+fn shared_job_cache_round_trips_and_invalidates() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config {
+        local_user: "local".into(),
+        remote_user: "remote".into(),
+        ssh_host: "host".into(),
+        state_path: directory.path().join("state.json"),
+        executable: PathBuf::from("slurm-log"),
+        sbatch_banks: Vec::new(),
+        clusters: vec![crate::config::ClusterConfig {
+            name: "cispa".into(),
+            controller: None,
+            transport: "ssh".into(),
+            user: "remote".into(),
+            ssh_host: "host".into(),
+            working_directory: PathBuf::from("/tmp"),
+            accounting: false,
+        }],
+    };
+    let path = cache_path(&config, "recent");
+    let jobs = vec![Job {
+        cluster: "cispa".into(),
+        id: "42".into(),
+        ..Job::default()
+    }];
+    store_jobs(&path, &jobs);
+    assert_eq!(cached_jobs(&path, Duration::from_secs(3)), Some(jobs));
+    assert_eq!(
+        recent(&config, "cispa", false).unwrap(),
+        Vec::<Job>::new(),
+        "accounting-disabled clusters must return before invoking SSH or sacct"
+    );
+    assert!(accounting_warnings(&config, &["cispa"], false).is_empty());
+    let warnings = accounting_warnings(&config, &["cispa"], true);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("completed jobs unavailable"));
+    assert!(warnings[0].contains("only active squeue jobs"));
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    invalidate_caches(&config);
+    assert!(!path.exists());
+}
 
 #[test]
 fn corrupt_or_stale_cache_is_a_miss() {
@@ -76,7 +123,6 @@ fn decodes_fifty_thousand_cached_jobs_within_budget() {
     let decoded = cached_jobs(&path, Duration::from_secs(60)).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(decoded.len(), jobs.len());
-    #[cfg(not(coverage))]
-    assert!(elapsed < Duration::from_millis(250));
+    assert!(elapsed < Duration::from_millis(if cfg!(coverage) { 1000 } else { 250 }));
     eprintln!("decode 50k cached jobs: {elapsed:?}");
 }

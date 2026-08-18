@@ -34,7 +34,7 @@ case "$*" in
     *'show job -o 3209343_2'*)
         printf 'JobId=3209343_2 UserId=offline(1000) JobName=array-job JobState=RUNNING Reason=None RunTime=00:01:30 TimeLimit=01:00:00 NumNodes=1 NumCPUs=4 Partition=gpu NodeList=node-1 Account=lab QOS=normal ReqTRES=cpu=4,mem=8G,gres/gpu=2 AllocTRES=cpu=4,mem=8G,gres/gpu=2 ExitCode=0:0\n'
         ;;
-    *'sstat '*'-a -j 3209343_2'*)
+    *'sstat'*'-a -j 3209343_2'*)
         printf '3209343_2.batch|4|cpu=4,mem=8G,gres/gpu=2|00:01:00|2G|1G|gres/gpuutil=70|gres/gpumem=3G\n'
         ;;
     *sacct*) exit 91 ;;

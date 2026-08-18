@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -36,11 +35,9 @@ pub struct Ledger {
     #[serde(default)]
     pub auto_add_default: bool,
     #[serde(default)]
+    pub log_warnings_default: bool,
+    #[serde(default)]
     pub interactive_jobs: HashMap<String, String>,
-    #[serde(default)]
-    pub adopted_jobs: HashMap<String, String>,
-    #[serde(default)]
-    pub submitted_jobs: HashMap<String, String>,
 }
 
 impl Ledger {
@@ -156,45 +153,15 @@ impl Ledger {
         .map(|_| ())
     }
 
-    /// Record an externally-submitted (manual `sbatch`) job that was never
-    /// previewed or authorized through the MCP submission flow. The stored
-    /// value is the observed batch-script hash when known, otherwise empty.
-    /// Adoption only records provenance; it never grants preview authority.
-    pub fn mark_adopted(path: &Path, job: &Job, batch_script_sha256: Option<&str>) -> Result<()> {
+    pub fn set_log_warnings(path: &Path, enabled: bool) -> Result<()> {
         update(path, |state| {
-            let key = job.key();
-            let value = batch_script_sha256.unwrap_or_default().to_string();
-            state.adopted_jobs.insert(key, value);
+            if state.log_warnings_default == enabled {
+                return false;
+            }
+            state.log_warnings_default = enabled;
             true
         })
         .map(|_| ())
-    }
-
-    /// Record the producer (batch script) hash of a job submitted through the
-    /// MCP preview flow. Later resubmission previews must present the same
-    /// producer hash to prove the batch script is unchanged.
-    pub fn mark_submitted(path: &Path, cluster: &str, id: &str, digest: &str) -> Result<()> {
-        update(path, |state| {
-            state
-                .submitted_jobs
-                .insert(format!("{cluster}:{id}"), digest.to_string());
-            true
-        })
-        .map(|_| ())
-    }
-
-    /// The recorded producer hash for a job, from either MCP submission or
-    /// external adoption. Empty values (adopted without an observed hash)
-    /// cannot prove an unchanged producer and are treated as absent.
-    pub fn producer_hash(path: &Path, cluster: &str, id: &str) -> Option<String> {
-        let state = Ledger::load(path).ok()?;
-        let key = format!("{cluster}:{id}");
-        state
-            .submitted_jobs
-            .get(&key)
-            .or_else(|| state.adopted_jobs.get(&key))
-            .filter(|value| !value.is_empty())
-            .cloned()
     }
 
     pub fn set_read(path: &Path, job_id: &str, read: bool) -> Result<usize> {
@@ -223,7 +190,9 @@ impl Ledger {
 }
 
 fn update(path: &Path, mutate: impl FnOnce(&mut Ledger) -> bool) -> Result<Ledger> {
-    fs::create_dir_all(path.parent().unwrap_or(Path::new("")))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let lock_path = path.with_extension("lock");
     let lock = OpenOptions::new()
         .create(true)
@@ -232,7 +201,7 @@ fn update(path: &Path, mutate: impl FnOnce(&mut Ledger) -> bool) -> Result<Ledge
         .write(true)
         .mode(0o600)
         .open(lock_path)?;
-    lock.lock_exclusive()?;
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
     // Parse once and retain the original bytes. Most refreshes discover no
     // state change; comparing the serialized result avoids a full atomic file
     // rewrite and its filesystem synchronization cost on that hot path.
@@ -263,5 +232,227 @@ fn update(path: &Path, mutate: impl FnOnce(&mut Ledger) -> bool) -> Result<Ledge
 }
 
 #[cfg(test)]
-#[path = "state/tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use std::{os::unix::fs::PermissionsExt, sync::Arc, thread};
+    #[test]
+    fn dismissal_hides_only_terminal_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let failed = Job {
+            cluster: "cispa".into(),
+            id: "1".into(),
+            state: "FAILED".into(),
+            ..Job::default()
+        };
+        let running = Job {
+            cluster: "cispa".into(),
+            id: "2".into(),
+            state: "RUNNING".into(),
+            ..Job::default()
+        };
+        assert_eq!(
+            Ledger::dismiss(&path, &[failed.clone(), running]).unwrap(),
+            1
+        );
+        let state = Ledger::load(&path).unwrap();
+        assert!(state.dismissed.contains_key(&failed.key()));
+        assert!(!state.dismissed.contains_key("cispa:2"));
+    }
+
+    #[test]
+    fn explicitly_closed_monitor_can_suppress_an_active_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let running = Job {
+            cluster: "cispa".into(),
+            id: "2".into(),
+            state: "RUNNING".into(),
+            ..Job::default()
+        };
+        Ledger::suppress(&path, &running).unwrap();
+        let state = Ledger::load(&path).unwrap();
+        assert!(state.opened.contains_key(&running.key()));
+        assert!(state.dismissed.contains_key(&running.key()));
+    }
+
+    #[test]
+    fn sync_remembers_interactive_jobs_across_scheduler_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let interactive = Job {
+            cluster: "cispa".into(),
+            id: "42".into(),
+            state: "RUNNING".into(),
+            interactive: true,
+            ..Job::default()
+        };
+        let state =
+            Ledger::sync(&path, std::slice::from_ref(&interactive), &HashSet::new()).unwrap();
+        assert!(state.interactive_jobs.contains_key(&interactive.key()));
+        assert!(
+            Ledger::load(&path)
+                .unwrap()
+                .interactive_jobs
+                .contains_key(&interactive.key())
+        );
+    }
+
+    #[test]
+    fn schema_migration_baselines_terminal_array_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let old = Job {
+            cluster: "cispa".into(),
+            id: "3202690_1".into(),
+            state: "COMPLETED".into(),
+            ..Job::default()
+        };
+        let state = Ledger::sync(
+            &path,
+            std::slice::from_ref(&old),
+            &HashSet::from(["cispa".into()]),
+        )
+        .unwrap();
+        assert_eq!(state.tracking_schema, Some(SCHEMA));
+        assert!(state.opened.contains_key(&old.key()));
+    }
+
+    #[test]
+    fn concurrent_updates_preserve_every_job_and_valid_json() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = Arc::new(directory.path().join("state.json"));
+        let workers: Vec<_> = (0..24)
+            .map(|id| {
+                let path = path.clone();
+                thread::spawn(move || {
+                    Ledger::mark_opened(
+                        &path,
+                        &Job {
+                            cluster: "cispa".into(),
+                            id: id.to_string(),
+                            ..Job::default()
+                        },
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let bytes = fs::read(path.as_ref()).unwrap();
+        let state: Ledger = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(state.known.len(), 24);
+        assert_eq!(state.opened.len(), 24);
+        assert!(bytes.ends_with(b"\n"));
+        assert_eq!(
+            fs::metadata(path.as_ref()).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(path.with_extension("lock"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn corrupt_state_is_reported_by_read_only_load() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        fs::write(&path, b"not-json").unwrap();
+        assert!(Ledger::load(&path).is_err());
+    }
+
+    #[test]
+    fn oversized_state_is_rejected_before_reading() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_STATE_BYTES + 1).unwrap();
+        assert!(Ledger::load(&path).is_err());
+    }
+
+    #[test]
+    fn mutation_never_overwrites_a_corrupt_ledger() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        fs::write(&path, b"not-json").unwrap();
+        assert!(Ledger::set_auto_add(&path, true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"not-json");
+    }
+
+    #[test]
+    fn defaults_noop_updates_and_read_markers_are_consistent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/state.json");
+        assert_eq!(Ledger::load(&path).unwrap(), Ledger::default());
+
+        Ledger::set_auto_add(&path, false).unwrap();
+        assert!(!path.exists(), "a no-op must not create the ledger");
+        Ledger::set_auto_add(&path, true).unwrap();
+        Ledger::set_auto_add(&path, true).unwrap();
+        assert!(Ledger::load(&path).unwrap().auto_add_default);
+
+        Ledger::set_log_warnings(&path, true).unwrap();
+        assert!(Ledger::load(&path).unwrap().log_warnings_default);
+        Ledger::set_log_warnings(&path, false).unwrap();
+        assert!(!Ledger::load(&path).unwrap().log_warnings_default);
+        for cluster in ["cispa", "sprint"] {
+            Ledger::mark_opened(
+                &path,
+                &Job {
+                    cluster: cluster.into(),
+                    id: "42".into(),
+                    ..Job::default()
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(Ledger::set_read(&path, "42", false).unwrap(), 2);
+        assert!(Ledger::load(&path).unwrap().opened.is_empty());
+        assert_eq!(Ledger::set_read(&path, "42", true).unwrap(), 2);
+        assert_eq!(Ledger::load(&path).unwrap().opened.len(), 2);
+        assert_eq!(Ledger::set_read(&path, "missing", true).unwrap(), 0);
+    }
+
+    #[test]
+    fn update_rejects_oversized_existing_state_without_replacing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_STATE_BYTES + 1).unwrap();
+        assert!(Ledger::set_auto_add(&path, true).is_err());
+        assert_eq!(fs::metadata(&path).unwrap().len(), MAX_STATE_BYTES + 1);
+    }
+
+    #[test]
+    #[ignore = "release-mode performance budget"]
+    fn no_op_sync_of_twenty_thousand_jobs_avoids_rewrite_within_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let jobs: Vec<_> = (0..20_000)
+            .map(|id| Job {
+                cluster: "cispa".into(),
+                id: id.to_string(),
+                state: "COMPLETED".into(),
+                ..Job::default()
+            })
+            .collect();
+        let complete = HashSet::from(["cispa".into()]);
+        Ledger::sync(&path, &jobs, &complete).unwrap();
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        let started = std::time::Instant::now();
+        Ledger::sync(&path, &jobs, &complete).unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(if cfg!(coverage) { 1000 } else { 250 })
+        );
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+        eprintln!("no-op sync 20k jobs: {elapsed:?}");
+    }
+}

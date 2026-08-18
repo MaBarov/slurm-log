@@ -6,7 +6,7 @@ use std::{
         fs::{OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -14,7 +14,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{config::Config, details::JobDetails, log_service::LogData, model::Job, state::Ledger};
@@ -117,25 +116,6 @@ fn exchange(socket: &PathBuf, request: &Request) -> Result<Reply> {
     read_frame(&mut stream)
 }
 
-fn connect_with_retry(socket: &PathBuf, request: &Request) -> Result<Reply> {
-    (0..50)
-        .find_map(|_| {
-            thread::sleep(Duration::from_millis(10));
-            exchange(socket, request).ok()
-        })
-        .context("daemon did not start")
-}
-
-fn wait_for_ping(socket: &PathBuf) -> Result<()> {
-    (0..50)
-        .find_map(|_| {
-            thread::sleep(Duration::from_millis(10));
-            exchange(socket, &Request::Ping).ok()
-        })
-        .map(|_| ())
-        .context("daemon did not restart after lifecycle operation")
-}
-
 fn start(config: &Config) -> Result<()> {
     let mut command = Command::new(&config.executable);
     command.args(config.child_args()).args(["daemon", "run"]);
@@ -163,7 +143,13 @@ pub fn query(
     };
     let mut reply = exchange(&socket, &request).or_else(|_| {
         start(config)?;
-        connect_with_retry(&socket, &request)
+        for _ in 0..50 {
+            thread::sleep(Duration::from_millis(10));
+            if let Ok(reply) = exchange(&socket, &request) {
+                return Ok(reply);
+            }
+        }
+        bail!("daemon did not start")
     })?;
     if let Some(error) = reply.error.take() {
         bail!(error);
@@ -188,7 +174,13 @@ pub fn job_details(config: &Config, cluster: &str, id: &str, force: bool) -> Res
     };
     let mut reply = exchange(&socket, &request).or_else(|_| {
         start(config)?;
-        connect_with_retry(&socket, &request)
+        for _ in 0..50 {
+            thread::sleep(Duration::from_millis(10));
+            if let Ok(reply) = exchange(&socket, &request) {
+                return Ok(reply);
+            }
+        }
+        bail!("daemon did not start")
     })?;
     if let Some(error) = reply.error.take() {
         bail!(error);
@@ -325,7 +317,13 @@ pub(crate) fn stop_for_lifecycle(config: &Config) -> Result<bool> {
 pub(crate) fn start_for_lifecycle(config: &Config) -> Result<()> {
     start(config)?;
     let (socket, _) = paths(config);
-    wait_for_ping(&socket)
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(10));
+        if exchange(&socket, &Request::Ping).is_ok() {
+            return Ok(());
+        }
+    }
+    bail!("daemon did not restart after lifecycle operation")
 }
 
 include!("daemon/server.rs");

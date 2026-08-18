@@ -164,8 +164,13 @@ fn blocked_summary(count: usize, shown: bool) -> String {
 }
 
 fn footer_text(rows: usize, selected: usize, query: &str, warning: &str, notice: &str) -> String {
+    let selection = if selected > 0 {
+        format!("{selected} selected (Enter open · c clear)")
+    } else {
+        "0 selected".to_string()
+    };
     format!(
-        "{rows} rows, {selected} selected{}{}{}",
+        "{rows} rows, {selection}{}{}{}",
         if query.is_empty() {
             String::new()
         } else {
@@ -197,32 +202,7 @@ fn footer_line(
     let mut line = footer_text(rows, selected, query, "", notice);
     line.push_str(&blocked_summary(blocked_count, blocked));
     line.push_str(warning);
-    truncate_display(&inline_text(&line), width.saturating_sub(1) as usize)
-}
-
-/// Scheduler stderr is untrusted terminal input. Footer rendering must remain
-/// one physical terminal row even when a command reports multiple errors.
-fn inline_text(text: &str) -> String {
-    let mut value = String::with_capacity(text.len());
-    let mut pending_space = false;
-    for character in text.chars() {
-        if character.is_control() {
-            if character.is_whitespace() {
-                pending_space = !value.is_empty();
-            }
-            continue;
-        }
-        if character.is_whitespace() {
-            pending_space = !value.is_empty();
-            continue;
-        }
-        if pending_space {
-            value.push(' ');
-            pending_space = false;
-        }
-        value.push(character);
-    }
-    value
+    truncate_display(&line, width.saturating_sub(1) as usize)
 }
 
 #[cfg(test)]

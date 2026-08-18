@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    ffi::OsString,
     fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, IsTerminal, Write},
     os::unix::fs::OpenOptionsExt,
@@ -163,11 +162,7 @@ fn include_paths(config: &Path, pattern: &str) -> Vec<PathBuf> {
 }
 
 fn ssh_config_aliases() -> Vec<String> {
-    ssh_config_aliases_from_home(std::env::var_os("HOME"))
-}
-
-fn ssh_config_aliases_from_home(home: Option<OsString>) -> Vec<String> {
-    let Some(home) = home else {
+    let Some(home) = std::env::var_os("HOME") else {
         return Vec::new();
     };
     ssh_config_aliases_from(&PathBuf::from(home))
@@ -390,7 +385,6 @@ fn safe_cluster_name(value: &str, fallback: &str) -> String {
 }
 
 include!("setup/discovery.rs");
-include!("setup/roots.rs");
 include!("setup/folder_browser.rs");
 include!("setup/configure.rs");
 
@@ -399,9 +393,3 @@ mod tests;
 #[cfg(test)]
 #[path = "setup/tests/coverage.rs"]
 mod tests_coverage;
-#[cfg(test)]
-#[path = "setup/tests/discovery.rs"]
-mod tests_discovery;
-#[cfg(test)]
-#[path = "setup/tests/discovery_subprocess.rs"]
-mod tests_discovery_subprocess;

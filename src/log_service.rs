@@ -348,5 +348,74 @@ fn generation(cluster: &str, id: &str, identity: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "log_service/tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounds_are_bounded_and_range_starts_are_clamped() {
+        assert_eq!(read_bounds(100, &ReadMode::Metadata), (100, 0));
+        assert_eq!(read_bounds(100, &ReadMode::Window(20)), (80, 20));
+        assert_eq!(read_bounds(10, &ReadMode::Window(20)), (0, 20));
+        assert_eq!(read_bounds(10, &ReadMode::Range(99, 4)), (10, 4));
+    }
+
+    #[test]
+    fn generation_is_stable_but_cluster_and_inode_scoped() {
+        let value = generation("one", "123", "1:2");
+        assert_eq!(value.len(), 64);
+        assert_eq!(value, generation("one", "123", "1:2"));
+        assert_ne!(value, generation("two", "123", "1:2"));
+        assert_ne!(value, generation("one", "123", "1:3"));
+    }
+
+    #[test]
+    fn local_reads_cover_metadata_tail_ranges_and_missing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("job.log");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let file = File::open(&path).unwrap();
+        let metadata = local_read(&file, &ReadMode::Metadata).unwrap();
+        assert_eq!((metadata.1, metadata.3, metadata.4), (10, 10, Vec::new()));
+        let window = local_read(&file, &ReadMode::Window(4)).unwrap();
+        assert_eq!((window.3, window.4), (6, b"6789".to_vec()));
+        let range = local_read(&file, &ReadMode::Range(2, 3)).unwrap();
+        assert_eq!((range.3, range.4), (2, b"234".to_vec()));
+        assert!(File::open(directory.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn log_data_and_confinement_helpers() {
+        let unavailable = LogData::unavailable("c", "1", None, "pending");
+        assert_eq!(unavailable.status, "pending");
+        assert!(unavailable.terminal);
+        let meta = LogData {
+            bytes: vec![1, 2, 3],
+            size: 10,
+            ..LogData::default()
+        }
+        .metadata_only();
+        assert!(meta.bytes.is_empty());
+        assert_eq!(meta.offset, 10);
+
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config {
+            local_user: "u".into(),
+            remote_user: "u".into(),
+            ssh_host: "h".into(),
+            state_path: directory.path().join("state.json"),
+            executable: std::path::PathBuf::from("slurm-log"),
+            sbatch_banks: Vec::new(),
+            clusters: vec![crate::config::ClusterConfig {
+                name: "local".into(),
+                controller: None,
+                transport: "local".into(),
+                user: "u".into(),
+                ssh_host: String::new(),
+                working_directory: directory.path().to_path_buf(),
+                accounting: false,
+            }],
+        };
+        assert!(confined_log_source(&config, "local", "../unsafe.log").is_err());
+        assert!(confined_log_source(&config, "local", "/outside/path.log").is_err());
+    }
+}

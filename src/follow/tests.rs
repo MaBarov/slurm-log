@@ -38,6 +38,106 @@ fn terminal_output_uses_crlf_to_avoid_staircase_logs() {
     filter_log(&b"first\nsecond\n"[..], true, true, &mut output).unwrap();
     assert_eq!(output, b"first\r\nsecond\r\n");
 }
+#[test]
+fn filter_log_preserves_ansi_escapes_and_progress_carriage_returns() {
+    let mut output = Vec::new();
+    let raw_log = b"\x1b[32mProgress: 10%\r\x1b[32mProgress: 20%\r\x1b[32mProgress: 100%\x1b[0m\n";
+    filter_log(&raw_log[..], true, false, &mut output).unwrap();
+    assert_eq!(
+        output,
+        b"\x1b[32mProgress: 10%\r\x1b[32mProgress: 20%\r\x1b[32mProgress: 100%\x1b[0m\n"
+    );
+}
+
+#[test]
+fn warning_filtering_reliably_hides_all_python_warning_classes_and_multiline_continuations() {
+    let sample_log = b"\
+INFO:root:Starting training run
+/path/to/torch/cuda/__init__.py:123: UserWarning: CUDA initialization warning
+  warnings.warn(
+    'multi-line warning message',
+    UserWarning
+  )
+/path/to/transformers/modeling.py:50: FutureWarning: Model class is deprecated
+  warnings.warn('deprecated')
+/path/to/lib.py:10: DeprecationWarning: fromstring is deprecated
+  img = torch.fromstring(...)
+/path/to/regex.py:5: SyntaxWarning: invalid escape sequence
+  re.compile('\\s')
+/path/to/net.py:80: RuntimeWarning: divide by zero encountered in log
+  return np.log(x)
+/path/to/io.py:90: ResourceWarning: unclosed file <_io.TextIOWrapper>
+  pass
+/path/to/mod.py:12: ImportWarning: Module was renamed
+  import old_module
+There are modules in the model that are kept in float32
+  module.linear
+  module.conv
+=== warnings summary ===
+tests/test_model.py:42
+  UserWarning: inner summary
+-- Docs: https://pytest.org/warnings
+WARNING:root:Application level warning that must be kept
+Epoch 1/10 complete - loss: 0.42
+";
+
+    // When show_warnings is FALSE: All Python warning blocks are stripped; application logs remain
+    let mut hidden_out = Vec::new();
+    filter_log(&sample_log[..], false, false, &mut hidden_out).unwrap();
+    let hidden_text = String::from_utf8(hidden_out).unwrap();
+
+    assert!(hidden_text.contains("INFO:root:Starting training run"));
+    assert!(hidden_text.contains("WARNING:root:Application level warning that must be kept"));
+    assert!(hidden_text.contains("Epoch 1/10 complete - loss: 0.42"));
+
+    // Verify all warning lines and their continuations are hidden
+    assert!(!hidden_text.contains("UserWarning: CUDA initialization"));
+    assert!(!hidden_text.contains("multi-line warning message"));
+    assert!(!hidden_text.contains("FutureWarning: Model class is deprecated"));
+    assert!(!hidden_text.contains("DeprecationWarning: fromstring is deprecated"));
+    assert!(!hidden_text.contains("SyntaxWarning: invalid escape sequence"));
+    assert!(!hidden_text.contains("RuntimeWarning: divide by zero"));
+    assert!(!hidden_text.contains("ResourceWarning: unclosed file"));
+    assert!(!hidden_text.contains("ImportWarning: Module was renamed"));
+    assert!(!hidden_text.contains("There are modules in the model"));
+    assert!(!hidden_text.contains("module.linear"));
+    assert!(!hidden_text.contains("=== warnings summary ==="));
+    assert!(!hidden_text.contains("inner summary"));
+
+    // When show_warnings is TRUE: EVERYTHING is shown verbatim without loss
+    let mut shown_out = Vec::new();
+    filter_log(&sample_log[..], true, false, &mut shown_out).unwrap();
+    let shown_text = String::from_utf8(shown_out).unwrap();
+
+    assert_eq!(shown_text, String::from_utf8_lossy(sample_log));
+}
+
+#[test]
+fn warning_filtering_never_hides_interleaved_exceptions_or_tracebacks() {
+    let sample = b"\
+/path/to/lib.py:1: UserWarning: warning 1
+  warnings.warn('w1')
+Traceback (most recent call last):
+  File 'train.py', line 42, in <module>
+    main()
+  File 'train.py', line 20, in main
+    raise RuntimeError('CUDA out of memory')
+RuntimeError: CUDA out of memory
+/path/to/lib.py:2: FutureWarning: warning 2
+  warnings.warn('w2')
+";
+
+    let mut out = Vec::new();
+    filter_log(&sample[..], false, false, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+
+    assert!(!text.contains("UserWarning: warning 1"));
+    assert!(!text.contains("FutureWarning: warning 2"));
+    assert!(text.contains("Traceback (most recent call last):"));
+    assert!(text.contains("  File 'train.py', line 42, in <module>"));
+    assert!(text.contains("  File 'train.py', line 20, in main"));
+    assert!(text.contains("RuntimeError: CUDA out of memory"));
+}
 
 #[test]
 fn enter_accepts_canonical_and_raw_terminal_endings() {
@@ -289,11 +389,4 @@ fn supervision_returns_shell_interrupt_status_without_polling_scheduler() {
     )
     .unwrap();
     assert_eq!(code, 130);
-}
-
-#[test]
-fn monitor_render_skips_unchanged_frames() {
-    let mut previous = String::from("unchanged");
-    render_monitor("unchanged", &mut previous).unwrap();
-    assert_eq!(previous, "unchanged");
 }

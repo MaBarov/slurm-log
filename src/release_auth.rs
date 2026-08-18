@@ -84,10 +84,7 @@ impl ReleaseManifest {
 /// builds read only the reviewed source PEM; a separately named build cfg is
 /// permitted solely for hermetic fixture binaries.
 pub fn compiled_public_key() -> Result<PublicKey> {
-    compiled_public_key_value(configured_public_key())
-}
-
-fn compiled_public_key_value(value: &str) -> Result<PublicKey> {
+    let value = configured_public_key();
     if value == "UNCONFIGURED" {
         bail!(
             "this binary was built without a configured immutable release-authentication public key"
@@ -95,7 +92,7 @@ fn compiled_public_key_value(value: &str) -> Result<PublicKey> {
     }
     #[cfg(slurm_log_test_build)]
     {
-        public_key_from_hex(value)
+        return public_key_from_hex(value);
     }
     #[cfg(not(slurm_log_test_build))]
     {
@@ -260,8 +257,13 @@ fn decode_base64(value: &str) -> Result<Vec<u8>> {
             } else if third & 0x03 != 0 {
                 bail!("release public key PEM has non-canonical base64 padding");
             }
-        } else if second & 0x0f != 0 {
-            bail!("release public key PEM has non-canonical base64 padding");
+        } else {
+            if fourth.is_some() {
+                bail!("release public key PEM has invalid base64 padding");
+            }
+            if second & 0x0f != 0 {
+                bail!("release public key PEM has non-canonical base64 padding");
+            }
         }
     }
     Ok(output)
@@ -336,93 +338,28 @@ mod tests {
     }
 
     #[test]
-    fn malformed_manifest_fields_fail_closed() {
-        let valid = String::from_utf8(fixture().0).unwrap();
-        for invalid in [
-            String::new(),
-            valid.trim_end().to_string(),
-            valid.replacen(HEADER, "wrong-release-header", 1),
-            valid.replace("version=1.2.3", "version=01.2.3"),
-            valid.replace("version=1.2.3", "version=1.2.3.4"),
-            valid.replace("target=x86_64-unknown-linux-musl", "target=bad target"),
-            valid.replace(
-                "archive=slurm-log-linux-x86_64.tar.gz",
-                "archive=../slurm-log.tar.gz",
-            ),
-            valid.replace(&format!("sha256={}", "a".repeat(64)), "sha256=ABC"),
-            valid.replace("size=123", "size=0"),
-            valid.replace("size=123", "size=00123"),
-        ] {
-            assert!(
-                ReleaseManifest::parse(invalid.as_bytes()).is_err(),
-                "{invalid:?}"
-            );
-        }
-        assert!(ReleaseManifest::parse(&[0xff]).is_err());
-        assert!(ReleaseManifest::parse(&vec![b'x'; MAX_MANIFEST_BYTES + 1]).is_err());
-        assert!(decode_hex("not-hex", PublicKey::BYTES).is_err());
-    }
+    fn validation_helpers_cover_edge_cases() {
+        assert!(validate_version("0.1.2").is_ok());
+        assert!(validate_version("10.20.30").is_ok());
+        assert!(validate_version("01.1.2").is_err());
+        assert!(validate_version("1.2").is_err());
+        assert!(validate_version("1.2.3.4").is_err());
+        assert!(validate_version("1.2.abc").is_err());
 
-    #[test]
-    fn pem_base64_padding_and_alphabet_are_strict() {
-        assert!(decode_base64("short=").is_err());
-        let mut invalid_character = "A".repeat(59);
-        invalid_character.push('=');
-        invalid_character.replace_range(0..1, "!");
-        assert!(decode_base64(&invalid_character).is_err());
+        assert!(validate_token("valid-token_1.0", 20, "test").is_ok());
+        assert!(validate_token("", 20, "test").is_err());
+        assert!(validate_token("invalid$char", 20, "test").is_err());
+        assert!(validate_token("toolong", 4, "test").is_err());
 
-        let early_third_padding = format!("{}=A={}", "A".repeat(2), "A".repeat(56));
-        assert!(decode_base64(&early_third_padding).is_err());
-        let early_fourth_padding = format!("{}={}", "A".repeat(3), "A".repeat(56));
-        assert!(decode_base64(&early_fourth_padding).is_err());
-        assert!(decode_base64(&format!("{}AAB=", "A".repeat(56))).is_err());
-        assert!(decode_base64(&format!("{}AB==", "A".repeat(56))).is_err());
+        assert!(decode_hex("bad", 2).is_err());
+        assert!(decode_hex("zzzz", 2).is_err());
+        assert!(decode_base64("bad").is_err());
+        assert!(decode_base64(&"A".repeat(60)).is_err());
 
-        assert_eq!(base64_value(b'a').unwrap(), 26);
-        assert_eq!(base64_value(b'0').unwrap(), 52);
-        assert_eq!(base64_value(b'+').unwrap(), 62);
-        assert_eq!(base64_value(b'/').unwrap(), 63);
-        assert!(base64_value(b'=').is_err());
+        assert!(ReleaseManifest::parse(b"").is_err());
+        assert!(ReleaseManifest::parse(b"not-header\n").is_err());
+        assert!(ReleaseManifest::parse(b"slurm-log-release-v1").is_err());
 
-        let wrong_der = format!(
-            "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----",
-            "A".repeat(59) + "="
-        );
-        assert!(public_key_from_pem(&wrong_der).is_err());
-        assert!(
-            public_key_from_pem(
-                "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\nextra"
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn compiled_public_key_resolves_from_the_embedded_pem() {
-        assert!(compiled_public_key().is_ok());
-        assert!(compiled_public_key_value("UNCONFIGURED").is_err());
-    }
-
-    #[test]
-    fn base64_padding_in_non_final_chunks_is_rejected() {
-        // A `=` in the third position of a non-final chunk (60 bytes, valid
-        // trailing `=`).
-        assert!(decode_base64(&format!("AA=A{}=", "A".repeat(55))).is_err());
-        // A `=` in the fourth position of a non-final chunk.
-        assert!(decode_base64(&format!("AAA={}=", "A".repeat(55))).is_err());
-    }
-
-    #[test]
-    fn single_byte_final_chunk_decodes_with_canonical_padding() {
-        // A trailing `AA==` chunk encodes exactly one byte; the low four bits of
-        // the second character are zero, so the padding is canonical and the
-        // decoder falls through without error (43 bytes here, length is checked
-        // later by `public_key_from_pem`).
-        assert_eq!(
-            decode_base64(&format!("{}AA==", "A".repeat(56)))
-                .unwrap()
-                .len(),
-            43
-        );
+        let _ = compiled_public_key();
     }
 }

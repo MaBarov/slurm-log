@@ -1,5 +1,4 @@
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
 use std::{
     collections::HashSet,
     fs,
@@ -17,7 +16,7 @@ use time::{
 use crate::{
     command::{remote_scheduler_command, shell_quote, ssh, text},
     config::Config,
-    model::{Job, terminal_text, valid_job_id},
+    model::{Job, terminal_text, token, valid_job_id},
     state::Ledger,
 };
 
@@ -110,6 +109,9 @@ impl<'de> serde::Deserialize<'de> for BoundedJobs {
                 let initial = sequence.size_hint().unwrap_or(0).min(MAX_INITIAL_JOBS);
                 let mut jobs = Vec::with_capacity(initial);
                 while let Some(job) = sequence.next_element()? {
+                    if jobs.len() == MAX_CACHE_JOBS {
+                        return Err(serde::de::Error::custom("job cache exceeds item limit"));
+                    }
                     jobs.push(job);
                 }
                 Ok(BoundedJobs(jobs))
@@ -129,7 +131,9 @@ fn msgpack_sequence_len(bytes: &[u8]) -> Option<usize> {
 }
 
 fn query_lock(path: &Path) -> Result<fs::File> {
-    fs::create_dir_all(path.parent().unwrap_or(Path::new("")))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let lock_path = path.with_extension("query.lock");
     let file = OpenOptions::new()
         .create(true)
@@ -138,12 +142,14 @@ fn query_lock(path: &Path) -> Result<fs::File> {
         .write(true)
         .mode(0o600)
         .open(lock_path)?;
-    file.lock_exclusive()?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)?;
     Ok(file)
 }
 
 fn store_jobs(path: &Path, jobs: &[Job]) {
-    let _ = fs::create_dir_all(path.parent().unwrap_or(Path::new("")));
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
     if OpenOptions::new()
         .create(true)
@@ -200,18 +206,12 @@ pub fn parse_queue(input: &str, cluster: &str) -> Vec<Job> {
         if jobs.len() == MAX_CACHE_JOBS {
             break;
         }
-        let fields: Vec<_> = line.split('|').map(str::trim).collect();
-        if !(4..=9).contains(&fields.len()) {
+        let mut fields = line.split('|').map(str::trim);
+        let (Some(id), Some(state), Some(name), Some(elapsed)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
             continue;
-        }
-        let mut fields = fields.into_iter();
-        let (id, state, name, elapsed) = fields
-            .next()
-            .zip(fields.next())
-            .zip(fields.next())
-            .zip(fields.next())
-            .map(|(((id, state), name), elapsed)| (id, state, name, elapsed))
-            .expect("validated scheduler field count");
+        };
         if !valid_job_id(id) {
             continue;
         }
@@ -220,6 +220,9 @@ pub fn parse_queue(input: &str, cluster: &str) -> Vec<Job> {
         let start_time = fields.next().unwrap_or("");
         let priority = fields.next().unwrap_or("");
         let command = fields.next().unwrap_or("");
+        if fields.next().is_some() {
+            continue;
+        }
         jobs.push(Job {
             cluster: cluster.into(),
             id: id.into(),
@@ -239,10 +242,53 @@ pub fn parse_queue(input: &str, cluster: &str) -> Vec<Job> {
 }
 
 fn interactive_command(command: &str) -> bool {
+    let base = command.rsplit('/').next().unwrap_or(command);
+    if base.is_empty() {
+        return false;
+    }
     matches!(
-        command.rsplit('/').next().unwrap_or(command),
-        "bash" | "sh" | "zsh" | "fish" | "csh" | "tcsh" | "nu"
-    )
+        base,
+        "bash"
+            | "sh"
+            | "zsh"
+            | "fish"
+            | "csh"
+            | "tcsh"
+            | "nu"
+            | "dash"
+            | "ksh"
+            | "python"
+            | "ipython"
+            | "ipython3"
+            | "julia"
+            | "node"
+            | "nodejs"
+            | "bun"
+            | "deno"
+            | "ruby"
+            | "irb"
+            | "perl"
+            | "lua"
+            | "luajit"
+            | "matlab"
+            | "octave"
+            | "php"
+            | "gdb"
+            | "cuda-gdb"
+            | "lldb"
+            | "screen"
+            | "top"
+            | "htop"
+            | "btop"
+            | "nvtop"
+            | "R"
+            | "Rscript"
+            | "jupyter"
+            | "jupyter-lab"
+            | "jupyter-notebook"
+    ) || (base.starts_with("python3") && base[7..].chars().all(|c| c.is_ascii_digit() || c == '.'))
+        || (base.starts_with("python2")
+            && base[7..].chars().all(|c| c.is_ascii_digit() || c == '.'))
 }
 
 pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {
@@ -251,20 +297,24 @@ pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {
         if jobs.len() == MAX_CACHE_JOBS {
             break;
         }
-        let fields: Vec<_> = line.split('|').map(str::trim).collect();
-        if !(5..=9).contains(&fields.len()) {
+        let mut fields = line.split('|').map(str::trim);
+        let (Some(id), Some(state), Some(name), Some(elapsed), Some(ended)) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
+            continue;
+        };
+        if !valid_job_id(id) {
             continue;
         }
-        let mut fields = fields.into_iter();
-        let (id, state, name, elapsed, ended) = fields
-            .next()
-            .zip(fields.next())
-            .zip(fields.next())
-            .zip(fields.next())
-            .zip(fields.next())
-            .map(|((((id, state), name), elapsed), ended)| (id, state, name, elapsed, ended))
-            .expect("validated scheduler field count");
-        if !valid_job_id(id) {
+        let exit_code = fields.next().unwrap_or("");
+        let max_rss = fields.next().unwrap_or("");
+        let alloc_tres = fields.next().unwrap_or("");
+        let partition = fields.next().unwrap_or("");
+        if fields.next().is_some() {
             continue;
         }
         jobs.push(Job {
@@ -275,10 +325,10 @@ pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {
             elapsed: terminal_text(elapsed),
             reason: String::new(),
             ended: terminal_text(ended),
-            exit_code: terminal_text(fields.next().unwrap_or("")),
-            max_rss: terminal_text(fields.next().unwrap_or("")),
-            alloc_tres: terminal_text(fields.next().unwrap_or("")),
-            partition: terminal_text(fields.next().unwrap_or("")),
+            exit_code: terminal_text(exit_code),
+            max_rss: terminal_text(max_rss),
+            alloc_tres: terminal_text(alloc_tres),
+            partition: terminal_text(partition),
             ..Job::default()
         });
     }

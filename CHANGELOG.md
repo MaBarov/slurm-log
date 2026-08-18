@@ -1,54 +1,47 @@
 # Changelog
 
+## 0.4.0
+
+- Add an interactive action toast system in the picker interface with 1.5-second
+  expiring notices for selection toggles (`Space`), bulk selection (`v`), clearing (`c`),
+  cluster cycling (`Tab` / `Shift-Tab`), group expanding/collapsing (`→` / `←`),
+  scheduler refresh (`r`), search clearing (`Esc`), and auto-add toggles (`A`).
+- Implement adaptive keylines in the picker header that dynamically scale with terminal
+  width to progressively surface `i details`, `s submit`, `d dismiss`, and navigation controls.
+- Add multi-selection action hints to the footer (`(Enter open · c clear)`) and tmux
+  workspace shortcut hints to interactive allocation frames (`Ctrl-b i details · Ctrl-b z zoom`).
+- Preserve carriage returns (`\r`) and raw terminal ANSI escape sequences in `filter_log`,
+  preventing progress bars (`tqdm`, Hugging Face, PyTorch, spinners) from printing
+  repeated newlines and staircasing in followed log panes.
+- Persist the `[W WARN ON / OFF]` log warning toggle across panel transitions and workspace
+  sessions via the tracking ledger on disk.
+- Classify interactive interpreters and debuggers (`python`, `ipython`, `julia`, `node`, `R`,
+  `gdb`, `cuda-gdb`, `matlab`, etc.) across arbitrary virtualenv, conda, system, and custom
+  paths as interactive, placing them in the blocked listing (`b` toggle).
+- Distinguish unschedulable dead dependencies (`DependencyNeverSatisfied`) from actionable
+  pending jobs (`Priority`, `Resources`, `Dependency`, `QOS`, `ReqNodeNotAvail`, `BeginTime`),
+  keeping actionable jobs immediately visible in the default live queue.
+- Optimize tmux workspace lifecycle and reconcile operations with batched commands and
+  zero-flicker cursor-home in-place rendering.
+
+## 0.3.2
+- Fix Slurm job array task identity validation when `scontrol` returns the master
+  JobId alongside `ArrayJobId` and `ArrayTaskId`, resolving "scontrol response job ID
+  does not match" errors on sub-jobs.
+- Classify non-shell interactive allocations (Python, IPython, Julia, Node, R,
+  debuggers, etc.) as interactive, correctly placing them in the blocked listing.
+- Switch tmux workspace `set-clipboard` to `on` so mouse/copy-mode selections are
+  stored in tmux paste buffers (`prefix + ]`) in addition to OSC-52 forwarding.
+
 ## 0.3.1
 
-- Fix the piped installer (`curl … | bash`) stalling on interactive terminals:
-  the installer redirected stdin to `/dev/tty`, which made the shell re-read
-  the rest of the script from the terminal. Interactive setup and the PATH
-  prompt now read from `/dev/tty` directly, so the script keeps reading from
-  the pipe. A failed wizard no longer swallows the install summary, and
-  Ctrl-D at the PATH prompt keeps the default instead of aborting.
-
-## 0.3.0
-
-- Add twelve MCP tools that keep a run inside MCP end to end: `slurm_doctor`,
-  `slurm_refresh_bank`, `slurm_wait_job`, `slurm_explain_pending`,
-  `slurm_find_artifact`, `slurm_read_declared_result`, `slurm_stage_bundle`,
-  `slurm_adopt_job`, `slurm_preflight_job`, `slurm_preview_resubmit`, plus a
-  digest-bound `slurm_submit_job` response and provenance metadata on script
-  search results.
-- Text fallbacks now include result counts, warnings, cursor, and first
-  matches, so clients no longer see a bare "structured result attached".
-- `slurm_doctor` separates scheduler reachability from bank health and reports
-  catalog generation, indexed script count, and last refresh.
-- Safe declared-result reading bound to `#SLURM_LOG-RESULT:` basename globs
-  declared by the batch script, confined beneath the configured working
-  directory and MIME-sniffed and size-limited.
-- Content-addressed bundle staging with an explicit repo-relative manifest,
-  size and secret-path checks, an immutable remote destination, and separate
-  execution approval.
-- Scheduling-only resubmission preview (`--partition`, `--dependency`, etc.)
-  that binds the unchanged producer hash and never auto-switches partitions.
-- Bounded server-side job waiting for state, completion, and log changes, and
-  pending-job explanation with partition availability.
-- Evidence-backed diagnosis separating cancellation, environment, OOM, timeout,
-  and application failures from scheduler errors.
-
-## 0.2.6
-
-- Construct a `--clusters` scheduler argument only when a cluster configures
-  an explicit controller, restoring remote single-cluster behaviour: a remote
-  scheduler no longer receives a fabricated `--clusters <label>` that it
-  rejects as an unknown cluster.
-- Validate returned submission controllers only when one is configured, and
-  let routing directives stand when no controller identity is declared.
-
-## 0.2.5
-
-- Treat local cluster names as display labels unless an explicit controller is
-  configured, preventing invalid `--clusters` arguments for local schedulers.
-- Flatten multi-line scheduler failures and terminal control bytes before
-  rendering picker footer warnings, preserving the one-row UI invariant.
+- Add live inline resource usage sparklines (CPU, Memory, GPU) to `Ctrl-b i`
+  compact pane and full `slurm-log details` views.
+- Compute interval delta CPU efficiency between poll samples for responsive
+  instantaneous activity metrics.
+- Make `--clusters` argument injection strictly opt-in via explicit controller
+  configuration, preventing multi-cluster database errors on standalone and
+  differently named local/remote clusters.
 
 ## 0.2.4
 

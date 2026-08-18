@@ -57,6 +57,8 @@ fn cache_rejects_error_payload_oversize_corruption_and_wrong_schema() {
         scripts: Vec::new(),
         warnings: Vec::new(),
         error: Some("failed".into()),
+        indexed_at: 0,
+        repo_commit: None,
     };
     store_bank_cache(&config, &root, &failed);
     assert!(!bank_cache_path(&config, &root).exists());
@@ -78,6 +80,8 @@ fn cache_rejects_error_payload_oversize_corruption_and_wrong_schema() {
             scripts: Vec::new(),
             warnings: Vec::new(),
             error: None,
+            indexed_at: 0,
+            repo_commit: None,
         },
     };
     fs::write(&path, rmp_serde::to_vec(&wrong).unwrap()).unwrap();
@@ -94,6 +98,8 @@ fn cache_write_failures_leave_no_partial_payload() {
         scripts: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        indexed_at: 0,
+        repo_commit: None,
     };
 
     let blocked_parent = directory.path().join("blocked-parent");
@@ -131,8 +137,10 @@ fn catalog_helpers_cover_empty_names_origins_directives_and_cluster_support() {
         name: "run".into(),
         directives: Vec::new(),
         origin: None,
-        declared_results: Vec::new(),
         bytes: Vec::new(),
+        bank_fingerprint: 0,
+        indexed_at: 0,
+        repo_commit: None,
     };
     assert!(supports_cluster(&shared, "local"));
     let local = Script {
@@ -141,38 +149,6 @@ fn catalog_helpers_cover_empty_names_origins_directives_and_cluster_support() {
     };
     assert!(supports_cluster(&local, "local"));
     assert!(!supports_cluster(&local, "remote"));
-}
-
-#[test]
-fn routing_directives_require_one_matching_controller() {
-    let mut configured = config(Vec::new());
-    configured.clusters[0].controller = Some("controller-a".into());
-    let target = &configured.clusters[0];
-    let script = |directive: &str| Script {
-        bank: "bank".into(),
-        relative: PathBuf::from("run.sbatch"),
-        name: "run".into(),
-        directives: vec![directive.into()],
-        origin: None,
-        declared_results: Vec::new(),
-        bytes: Vec::new(),
-    };
-
-    for directive in [
-        "--clusters=controller-a",
-        "--cluster controller-a",
-        "-Mcontroller-a",
-        "-M=controller-a",
-    ] {
-        validate_script_controller(&script(directive), target).unwrap();
-    }
-    for directive in [
-        "--clusters",
-        "--cluster controller-a controller-b",
-        "-Mcontroller-b",
-    ] {
-        assert!(validate_script_controller(&script(directive), target).is_err());
-    }
 }
 
 #[test]
@@ -192,21 +168,6 @@ fn scan_worker_validates_arguments_and_serializes_failures() {
 }
 
 #[test]
-fn sbatch_directives_skip_blank_lines_and_stop_at_body_text() {
-    assert_eq!(
-        sbatch_directives(
-            "\n#SBATCH --job-name=blank\n   \n\t\n#SBATCH --gres=gpu:1\n# just a comment\necho body\n#SBATCH ignored\n"
-        ),
-        ["--job-name=blank", "--gres=gpu:1"]
-    );
-    assert!(sbatch_directives("").is_empty());
-    assert_eq!(
-        sbatch_directives("#SBATCH#SBATCH\n"),
-        ["#SBATCH".to_string()]
-    );
-}
-
-#[test]
 fn cancellation_rejects_invalid_active_ids_without_invoking_scheduler() {
     let job = Job {
         cluster: "local".into(),
@@ -215,17 +176,6 @@ fn cancellation_rejects_invalid_active_ids_without_invoking_scheduler() {
         ..Job::default()
     };
     assert!(cancel(&config(Vec::new()), &[job]).is_err());
-}
-
-#[test]
-fn cancel_verified_rejects_invalid_active_ids() {
-    let job = Job {
-        cluster: "local".into(),
-        id: "bad id".into(),
-        state: "RUNNING".into(),
-        ..Job::default()
-    };
-    assert!(cancel_verified(&config(Vec::new()), &[job]).is_err());
 }
 
 #[test]
@@ -273,6 +223,17 @@ fn multi_bank_catalog_names_duplicates_and_infers_script_origins() {
         .unwrap()
         .is_empty()
     );
+    assert!(scan_all(&config(Vec::new())).is_err());
+    assert!(scan_all_fresh(&config(Vec::new())).is_err());
+    assert_eq!(fallback_name(Path::new("/")), "Sbatch Bank");
+    assert!(epoch_seconds() > 0);
+    assert!(configured_scripts(&configured).is_ok());
+    assert!(configured_scripts_fresh(&configured).is_ok());
+    assert!(catalog(&configured).is_ok());
+    assert!(catalog_fresh(&configured).is_ok());
+    assert!(supports_cluster(&scripts[0], "local"));
+    assert!(token_matches_cluster("gpu1", "gpu"));
+    assert!(!token_matches_cluster("gpux", "gpu"));
 }
 
 #[test]
@@ -329,20 +290,117 @@ fn configured_bank_scan_rejects_hard_linked_scripts() {
 }
 
 #[test]
-fn declared_result_markers_are_restricted_basename_globs() {
-    let bytes = b"#!/bin/sh\n#SBATCH --job-name=gate\n\
-        #SLURM_LOG-RESULT: cpu_gate.json\n\
-        #SLURM_LOG-RESULT: verifier-receipt.txt\n\
-        #SLURM_LOG-RESULT: cpu_gate.json\n\
-        #SLURM_LOG-RESULT: ../outside.json\n\
-        #SLURM_LOG-RESULT: /abs.json\n\
-        #SLURM_LOG-RESULT: deep/dir/out.json\n\
-        #SLURM_LOG-RESULT: bad;pattern\n\
-        #SLURM_LOG-RESULT:\n\
-        echo \"#SLURM_LOG-RESULT: not-a-comment-declaration\"\n";
-    assert_eq!(
-        parse_declared_results(bytes),
-        ["cpu_gate.json", "verifier-receipt.txt"]
-    );
-    assert!(parse_declared_results(b"#!/bin/sh\necho none\n").is_empty());
+fn submit_confirmation_uses_crlf_for_every_terminal_line() {
+    let config = config(Vec::new());
+    let script = Script {
+        bank: "bank".into(),
+        relative: PathBuf::from("train.sbatch"),
+        name: "train".into(),
+        directives: vec!["--gpus=2".into(), "--time=1:00:00".into()],
+        origin: None,
+        bytes: Vec::new(),
+        bank_fingerprint: 0,
+        indexed_at: 0,
+        repo_commit: None,
+    };
+    let text = submit_confirmation(&script, &config.clusters[0]);
+    assert!(text.as_bytes().iter().enumerate().all(
+            |(index, byte)| *byte != b'\n' || index > 0 && text.as_bytes()[index - 1] == b'\r'
+        ));
+    assert!(text.contains("submit and open its pane"));
+    assert_eq!(confirmation_choice(KeyCode::Char('y')), Some(true));
+    assert_eq!(confirmation_choice(KeyCode::Esc), Some(false));
+    assert_eq!(confirmation_choice(KeyCode::Char('a')), None);
+}
+
+#[test]
+fn selected_submission_target_is_obvious_in_cluster_tabs() {
+    let mut config = config(Vec::new());
+    config.clusters.push(ClusterConfig {
+        name: "remote".into(),
+        controller: None,
+        transport: "ssh".into(),
+        user: "alice".into(),
+        ssh_host: "remote".into(),
+        working_directory: PathBuf::from("/work"),
+        accounting: true,
+    });
+    assert_eq!(cluster_tabs(&config, 0), "[local]  remote");
+    assert_eq!(cluster_tabs(&config, 1), "local  [remote]");
+}
+
+#[test]
+fn provenance_and_git_head_resolution_handles_branches_and_worktrees() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo = directory.path().join("repo");
+    let git_dir = repo.join(".git");
+    fs::create_dir_all(git_dir.join("refs/heads")).unwrap();
+    fs::write(git_dir.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+    fs::write(
+        git_dir.join("refs/heads/main"),
+        b"0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .unwrap();
+    assert_eq!(repo_head_commit(&repo), Some("0123456789ab".to_string()));
+
+    // Packed refs fallback
+    let repo2 = directory.path().join("repo2");
+    let git_dir2 = repo2.join(".git");
+    fs::create_dir_all(&git_dir2).unwrap();
+    fs::write(git_dir2.join("HEAD"), b"ref: refs/heads/feature\n").unwrap();
+    fs::write(
+        git_dir2.join("packed-refs"),
+        b"# pack-refs with: peeled-tags\nfedcba9876543210fedcba9876543210fedcba98 refs/heads/feature\n",
+    )
+    .unwrap();
+    assert_eq!(repo_head_commit(&repo2), Some("fedcba987654".to_string()));
+
+    // Direct detached commit
+    let repo3 = directory.path().join("repo3");
+    let git_dir3 = repo3.join(".git");
+    fs::create_dir_all(&git_dir3).unwrap();
+    fs::write(
+        git_dir3.join("HEAD"),
+        b"abcdef0123456789abcdef0123456789abcdef01\n",
+    )
+    .unwrap();
+    assert_eq!(repo_head_commit(&repo3), Some("abcdef012345".to_string()));
+}
+
+#[test]
+fn script_controller_validation_handles_slurm_directive_variants() {
+    let target = ClusterConfig {
+        name: "target_cluster".into(),
+        controller: Some("fed_ctrl".into()),
+        transport: "local".into(),
+        user: "offline".into(),
+        ssh_host: String::new(),
+        working_directory: PathBuf::from("/work"),
+        accounting: false,
+    };
+    let valid_script = Script {
+        bank: "bank".into(),
+        relative: PathBuf::from("test.sbatch"),
+        name: "test".into(),
+        directives: vec!["--clusters=fed_ctrl".into(), "-M fed_ctrl".into()],
+        origin: None,
+        bytes: Vec::new(),
+        bank_fingerprint: 0,
+        indexed_at: 0,
+        repo_commit: None,
+    };
+    assert!(validate_script_controller(&valid_script, &target).is_ok());
+
+    let invalid_script = Script {
+        bank: "bank".into(),
+        relative: PathBuf::from("test.sbatch"),
+        name: "test".into(),
+        directives: vec!["--clusters=wrong_ctrl".into()],
+        origin: None,
+        bytes: Vec::new(),
+        bank_fingerprint: 0,
+        indexed_at: 0,
+        repo_commit: None,
+    };
+    assert!(validate_script_controller(&invalid_script, &target).is_err());
 }

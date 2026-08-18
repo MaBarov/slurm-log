@@ -230,7 +230,7 @@ fn searches_one_hundred_thousand_jobs_within_budget() {
         .count();
     let elapsed = started.elapsed();
     assert_eq!(matches, 200);
-    assert!(elapsed < Duration::from_millis(150));
+    assert!(elapsed < Duration::from_millis(if cfg!(coverage) { 600 } else { 150 }));
     eprintln!("search 100k jobs: {elapsed:?}");
 }
 
@@ -245,6 +245,48 @@ fn toggle_notices_are_explicit_and_expire_after_about_1500ms() {
     assert!(lifetime >= Duration::from_millis(1_500));
     assert!(lifetime < Duration::from_millis(1_550));
     assert!(footer_text(4, 1, "", "", &message).contains(&message));
+}
+
+#[test]
+fn interactive_toast_hints_teach_command_shortcuts_and_expire_cleanly() {
+    let mut notice = None;
+
+    // 1. Selection toast includes open and clear hints
+    set_notice(&mut notice, "2 selected (Enter open · c clear)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "2 selected (Enter open · c clear)"
+    );
+    let line = footer_text(10, 2, "", "", &notice.as_ref().unwrap().0);
+    assert!(line.contains("2 selected (Enter open · c clear)"));
+
+    // 2. Cluster switch toast includes navigation hints
+    set_notice(&mut notice, "Cluster: sprint (Tab next · Shift-Tab prev)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Cluster: sprint (Tab next · Shift-Tab prev)"
+    );
+
+    // 3. Group expand toast includes collapse and details hints
+    set_notice(&mut notice, "Group expanded (← collapse · i details on job)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Group expanded (← collapse · i details on job)"
+    );
+
+    // 4. Group collapse toast includes expand and mark hints
+    set_notice(&mut notice, "Group collapsed (→ expand · Space mark all)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Group collapsed (→ expand · Space mark all)"
+    );
+
+    // 5. Refresh toast includes history hints
+    set_notice(&mut notice, "Scheduler refreshed (r refresh · o history)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Scheduler refreshed (r refresh · o history)"
+    );
 }
 
 mod responsive;
@@ -377,7 +419,7 @@ fn groups_twenty_thousand_archive_jobs_within_budget() {
     let rows = grouped_rows(&jobs, &indices, &HashSet::new());
     let elapsed = started.elapsed();
     assert_eq!(rows.len(), 200);
-    assert!(elapsed < Duration::from_millis(100));
+    assert!(elapsed < Duration::from_millis(if cfg!(coverage) { 400 } else { 100 }));
     eprintln!("group 20k jobs: {elapsed:?}");
 }
 
@@ -398,7 +440,7 @@ fn pane_catalog_retains_only_selected_archive_jobs() {
     let baseline: HashMap<_, _> = jobs.iter().cloned().map(|job| (job.key(), job)).collect();
     let baseline_elapsed = baseline_started.elapsed();
     assert_eq!(baseline.len(), jobs.len());
-    assert!(optimized < Duration::from_millis(30));
+    assert!(optimized < Duration::from_millis(if cfg!(coverage) { 150 } else { 30 }));
     assert!(optimized < baseline_elapsed);
 
     let mut visible = vec![known.values().next().unwrap().clone()];

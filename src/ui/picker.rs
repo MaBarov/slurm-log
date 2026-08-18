@@ -28,11 +28,13 @@ pub fn pick(
     remember_selected(&mut known_jobs, &jobs, &selected);
     // Already-open blocked panes remain in the hidden selection catalog, but
     // the ordinary live view must not bypass its blocked filter to show them.
-    jobs.retain(|job| show_blocked || !job.blocked_category());
+    if !show_blocked {
+        jobs.retain(|job| !job.blocked_category());
+    }
     let mut expanded = HashSet::new();
     let mut query = String::new();
     let mut show_warnings = false;
-    let mut show_log_warnings = false;
+    let mut show_log_warnings = ledger.log_warnings_default;
     let mut show_help = false;
     let mut help_offset = 0usize;
     let mut selection_dirty = false;

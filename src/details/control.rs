@@ -27,6 +27,8 @@ pub fn run(config: &Config, cluster: &str, id: &str, compact: bool) -> Result<()
     let mut current: Option<JobDetails> = None;
     let mut cpu = VecDeque::with_capacity(40);
     let mut memory = VecDeque::with_capacity(40);
+    let mut gpu = VecDeque::with_capacity(40);
+    let mut prev_cpu_sample: Option<(Instant, u64)> = None;
     loop {
         if !paused && !current.as_ref().is_some_and(|item| item.terminal) && Instant::now() >= next
         {
@@ -35,11 +37,29 @@ pub fn run(config: &Config, cluster: &str, id: &str, compact: bool) -> Result<()
             manual_refresh = false;
             match crate::daemon::job_details(config, cluster, id, force) {
                 Ok(details) => {
-                    if let Some(value) = details.cpu_efficiency {
-                        push_sample(&mut cpu, value);
-                    }
                     if let Some(value) = details.memory_efficiency {
                         push_sample(&mut memory, value);
+                    }
+                    if let Some(value) = details.gpu_utilization {
+                        push_sample(&mut gpu, value);
+                    }
+                    let now = Instant::now();
+                    if let Some((prev_time, prev_total)) = prev_cpu_sample {
+                        let dt = now.duration_since(prev_time).as_secs_f64();
+                        if dt >= 0.5 && details.cpus > 0 {
+                            let delta_cpu =
+                                details.total_cpu_seconds.saturating_sub(prev_total) as f64;
+                            let instant_eff = (delta_cpu / (dt * details.cpus as f64) * 100.0)
+                                .clamp(0.0, 100.0);
+                            push_sample(&mut cpu, instant_eff);
+                        } else if let Some(value) = details.cpu_efficiency {
+                            push_sample(&mut cpu, value);
+                        }
+                    } else if let Some(value) = details.cpu_efficiency {
+                        push_sample(&mut cpu, value);
+                    }
+                    if details.total_cpu_seconds > 0 || details.state.starts_with("RUNNING") {
+                        prev_cpu_sample = Some((now, details.total_cpu_seconds));
                     }
                     activity = if requested_manually {
                         if previous_sample.as_deref() == Some(details.sampled_at.as_str())
@@ -80,14 +100,14 @@ pub fn run(config: &Config, cluster: &str, id: &str, compact: bool) -> Result<()
             };
             next = Instant::now() + delay;
             if let Some(details) = &current {
-                draw(details, compact, paused, &activity, &cpu, &memory)?;
+                draw(details, compact, paused, &activity, &cpu, &memory, &gpu)?;
             }
         }
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Resize(_, _) => {
                     if let Some(details) = &current {
-                        draw(details, compact, paused, &activity, &cpu, &memory)?;
+                        draw(details, compact, paused, &activity, &cpu, &memory, &gpu)?;
                     }
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -99,7 +119,7 @@ pub fn run(config: &Config, cluster: &str, id: &str, compact: bool) -> Result<()
                             next = Instant::now();
                         }
                         if let Some(details) = &current {
-                            draw(details, compact, paused, &activity, &cpu, &memory)?;
+                            draw(details, compact, paused, &activity, &cpu, &memory, &gpu)?;
                         }
                     }
                     KeyCode::Char('r') => {
@@ -112,7 +132,7 @@ pub fn run(config: &Config, cluster: &str, id: &str, compact: bool) -> Result<()
                             next = Instant::now();
                         }
                         if let Some(details) = &current {
-                            draw(details, compact, paused, &activity, &cpu, &memory)?;
+                            draw(details, compact, paused, &activity, &cpu, &memory, &gpu)?;
                         }
                     }
                     _ => {}

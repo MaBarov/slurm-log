@@ -115,46 +115,47 @@ fn split_watcher_error(stderr: &[u8], opened: usize, total: usize) -> anyhow::Er
     )
 }
 fn setup(config: &Config, session: &str) -> Result<()> {
-    for args in [
-        vec!["set-option", "-t", session, "mouse", "on"],
-        vec!["set-option", "-t", session, "history-limit", "50000"],
-        vec!["set-option", "-w", "-t", session, "remain-on-exit", "on"],
-        vec!["set-option", "-t", session, "bell-action", "any"],
-        vec!["set-option", "-t", session, "visual-bell", "off"],
-        // Replace tmux's generic `[session] 0:binary*` status with the focused
-        // Slurm pane's identity. Pane options make this update locally and
-        // immediately on focus without a scheduler query or a shell hook.
-        vec!["set-option", "-t", session, "status-left", ""],
-        vec!["set-option", "-t", session, "status-right", ""],
-        vec!["set-option", "-t", session, "status-justify", "centre"],
-        vec![
-            "set-option",
-            "-t",
-            session,
-            "status-style",
-            "fg=colour0,bg=colour2",
-        ],
-        vec!["set-option", "-t", session, "window-status-format", ""],
-        vec![
-            "set-option",
-            "-t",
-            session,
-            "window-status-current-format",
-            persistent_job_status_format(),
-        ],
-        vec![
-            "set-option",
-            "-t",
-            session,
-            "window-status-current-style",
-            "fg=colour0,bg=colour2",
-        ],
-    ] {
-        tmux(args)?;
-    }
-    // Do not let arbitrary application/log OSC-52 sequences update the
-    // terminal clipboard. Explicit tmux copy-mode selection remains available.
-    tmux(["set-option", "-s", "set-clipboard", "external"])?;
+    let mut batch: Vec<String> = Vec::with_capacity(128);
+    let mut push_cmd = |args: &[&str]| {
+        if !batch.is_empty() {
+            batch.push(";".into());
+        }
+        batch.extend(args.iter().map(|s| (*s).to_string()));
+    };
+
+    push_cmd(&["set-option", "-t", session, "mouse", "on"]);
+    push_cmd(&["set-option", "-t", session, "history-limit", "50000"]);
+    push_cmd(&["set-option", "-w", "-t", session, "remain-on-exit", "on"]);
+    push_cmd(&["set-option", "-t", session, "bell-action", "any"]);
+    push_cmd(&["set-option", "-t", session, "visual-bell", "off"]);
+    push_cmd(&["set-option", "-t", session, "status-left", ""]);
+    push_cmd(&["set-option", "-t", session, "status-right", ""]);
+    push_cmd(&["set-option", "-t", session, "status-justify", "centre"]);
+    push_cmd(&[
+        "set-option",
+        "-t",
+        session,
+        "status-style",
+        "fg=colour0,bg=colour2",
+    ]);
+    push_cmd(&["set-option", "-t", session, "window-status-format", ""]);
+    let format = persistent_job_status_format();
+    push_cmd(&[
+        "set-option",
+        "-t",
+        session,
+        "window-status-current-format",
+        &format,
+    ]);
+    push_cmd(&[
+        "set-option",
+        "-t",
+        session,
+        "window-status-current-style",
+        "fg=colour0,bg=colour2",
+    ]);
+    push_cmd(&["set-option", "-s", "set-clipboard", "on"]);
+
     for table in ["copy-mode", "copy-mode-vi"] {
         for (key, command) in [
             ("MouseDragEnd1Pane", "send-keys -X stop-selection"),
@@ -165,16 +166,17 @@ fn setup(config: &Config, session: &str) -> Result<()> {
             ),
             ("MouseUp1Pane", "send-keys -X cancel"),
         ] {
-            tmux(["bind-key", "-T", table, key, command])?;
+            push_cmd(&["bind-key", "-T", table, key, command]);
         }
     }
-    tmux([
+    push_cmd(&[
         "bind-key",
         "-T",
         "root",
         "MouseUp3Pane",
         "display-message -d 1500 'Copied to clipboard'",
-    ])?;
+    ]);
+
     let popup = format!(
         "SLURM_LOG_POPUP=1 {} {} pick-add {}",
         shell_words::quote(&config.executable.display().to_string()),
@@ -187,7 +189,7 @@ fn setup(config: &Config, session: &str) -> Result<()> {
         session
     );
     for key in ["j", "a"] {
-        tmux([
+        push_cmd(&[
             "bind-key",
             key,
             "display-popup",
@@ -199,8 +201,9 @@ fn setup(config: &Config, session: &str) -> Result<()> {
             &popup,
             "\\;",
             "refresh-client",
-        ])?;
+        ]);
     }
+
     let details = format!(
         "{} {} toggle-details '#{{pane_id}}'",
         shell_words::quote(&config.executable.display().to_string()),
@@ -211,7 +214,8 @@ fn setup(config: &Config, session: &str) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" "),
     );
-    tmux(["bind-key", "i", "run-shell", &details])?;
+    push_cmd(&["bind-key", "i", "run-shell", &details]);
+
     let close_pane = format!(
         "{} {} close-pane {} '#{{pane_id}}'",
         shell_words::quote(&config.executable.display().to_string()),
@@ -223,10 +227,8 @@ fn setup(config: &Config, session: &str) -> Result<()> {
             .join(" "),
         shell_words::quote(session)
     );
-    // tmux's default `x` asks for confirmation in the status line, which is
-    // easy to miss under the persistent job identity. Use an explicit action:
-    // close details/extra logs immediately and protect the final log pane.
-    tmux(["bind-key", "x", "run-shell", &close_pane])?;
+    push_cmd(&["bind-key", "x", "run-shell", &close_pane]);
+
     let toggle = format!(
         "{} {} toggle-auto {}",
         shell_words::quote(&config.executable.display().to_string()),
@@ -238,7 +240,8 @@ fn setup(config: &Config, session: &str) -> Result<()> {
             .join(" "),
         session
     );
-    tmux(["bind-key", "A", "run-shell", &toggle])?;
+    push_cmd(&["bind-key", "A", "run-shell", &toggle]);
+
     let single = format!(
         "{} single-pane {}",
         shell_words::quote(&config.executable.display().to_string()),
@@ -249,18 +252,15 @@ fn setup(config: &Config, session: &str) -> Result<()> {
         "confirm-before -p 'Close the entire slurm-log workspace? (y/n)' '{}'",
         close
     );
-    // `q` is the single workspace-close command. Remove the legacy uppercase
-    // binding as tmux key tables outlive individual slurm-log sessions.
-    tmux(["unbind-key", "-q", "Q"])?;
-    tmux(["bind-key", "q", "if-shell", &single, &close, &confirm])?;
+    push_cmd(&["unbind-key", "-q", "Q"]);
+    push_cmd(&["bind-key", "q", "if-shell", &single, &close, &confirm]);
+
     let ledger = crate::state::Ledger::load(&config.state_path)?;
-    tmux([
-        "set-option",
-        "-t",
-        session,
-        "@slurm_log_auto_add",
-        if ledger.auto_add_default { "on" } else { "off" },
-    ])?;
+    let auto_add_val = if ledger.auto_add_default { "on" } else { "off" };
+    push_cmd(&["set-option", "-t", session, "@slurm_log_auto_add", auto_add_val]);
+
+    tmux(batch)?;
+
     if ledger.auto_add_default {
         start_monitor(config, session)?;
     }

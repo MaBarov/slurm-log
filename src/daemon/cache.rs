@@ -173,6 +173,8 @@ fn apply_refresh_result(
         });
         entry.created = refreshed_at;
         invalidate_older_combined(entries, cluster, archive, refreshed_at);
+    } else {
+        entry.created = Instant::now();
     }
 }
 

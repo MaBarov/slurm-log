@@ -1,4 +1,6 @@
 use super::*;
+#[path = "tests/accounting.rs"]
+mod accounting;
 
 #[test]
 fn parses_units_durations_and_gpu_tres() {
@@ -105,7 +107,7 @@ fn memory_peak_remains_useful_when_no_allocation_limit_exists() {
         max_rss_bytes: 11 * 1024 * 1024 * 1024,
         ..JobDetails::default()
     };
-    assert_eq!(memory_usage(&details), "11.0 GiB peak (limit unknown)");
+    assert_eq!(memory_usage(&details), "11.0 GiB peak");
 }
 
 #[test]
@@ -324,8 +326,18 @@ fn renderers_cover_full_compact_terminal_stale_and_metric_states() {
     };
     let cpu = VecDeque::from([0.0, 25.0, 50.0, 75.0, 100.0]);
     let memory = VecDeque::from([100.0, 50.0]);
-    draw(&details, false, true, "paused manually", &cpu, &memory).unwrap();
-    draw(&details, true, false, "", &cpu, &memory).unwrap();
+    let gpu = VecDeque::from([0.0, 50.0, 100.0]);
+    draw(
+        &details,
+        false,
+        true,
+        "paused manually",
+        &cpu,
+        &memory,
+        &gpu,
+    )
+    .unwrap();
+    draw(&details, true, false, "", &cpu, &memory, &gpu).unwrap();
 
     assert_eq!(clean(""), "—");
     assert_eq!(clean("Unknown"), "—");
@@ -339,8 +351,12 @@ fn renderers_cover_full_compact_terminal_stale_and_metric_states() {
     assert_eq!(bytes(1), "1.0 B");
     assert_eq!(bytes(1024), "1.0 KiB");
     assert_eq!(bytes(1024_u64.pow(4)), "1.0 TiB");
-    assert_eq!(spark(&VecDeque::new()), "collecting…");
-    assert_eq!(spark(&cpu).chars().count(), 5);
+    assert_eq!(spark(&VecDeque::new()), "······························");
+    assert_eq!(spark(&cpu).chars().count(), 30);
+    assert_eq!(spark_padded(&VecDeque::new(), 10), "··········");
+    assert_eq!(spark_padded(&cpu, 10).chars().count(), 10);
+    assert_eq!(spark_padded(&cpu, 3).chars().count(), 3);
+    assert_eq!(spark_padded(&gpu, 10).chars().count(), 10);
     assert!(hint(&details).unwrap().contains("GPU utilization"));
 
     details.gpu_utilization = Some(0.0);
@@ -352,7 +368,8 @@ fn renderers_cover_full_compact_terminal_stale_and_metric_states() {
     assert_eq!(hint(&details), None);
     details.terminal = true;
     details.stale_error.clear();
-    draw(&details, false, false, "", &cpu, &memory).unwrap();
+    draw(&details, false, false, "", &cpu, &memory, &gpu).unwrap();
+    draw(&details, true, false, "", &cpu, &memory, &gpu).unwrap();
     print_text(&details);
 }
 
@@ -377,6 +394,27 @@ fn metric_labels_cover_recorded_and_missing_gpu_and_memory() {
 }
 
 #[test]
+fn inline_and_full_sparklines_render_across_widths_and_sparse_metrics() {
+    let mut history = VecDeque::new();
+    assert_eq!(spark_padded(&history, 8), "········");
+    assert_eq!(spark(&history), "······························");
+
+    push_sample(&mut history, 0.0);
+    assert_eq!(spark_padded(&history, 8), "·······▁");
+    assert_eq!(spark(&history), "·····························▁");
+
+    push_sample(&mut history, 50.0);
+    push_sample(&mut history, 100.0);
+    assert_eq!(spark_padded(&history, 2), "▅█");
+    assert_eq!(spark_padded(&history, 8), "·····▁▅█");
+    assert_eq!(spark(&history), "···························▁▅█");
+
+    push_sample(&mut history, -10.0);
+    push_sample(&mut history, 150.0);
+    assert_eq!(spark_padded(&history, 2), "▁█");
+}
+
+#[test]
 #[ignore = "release-mode performance budget"]
 fn parses_large_accounting_snapshot_within_budget() {
     let main = "42|train|COMPLETED|None|gpu|acct|normal|sub|start|end|00:10:00|600|01:00:00|1|8|8|8|32G|||cpu=8,mem=32G,gres/gpu:a100=2|cpu=8,mem=32G,gres/gpu:a100=2|01:00:00|4800|0:0|node1||";
@@ -392,7 +430,6 @@ fn parses_large_accounting_snapshot_within_budget() {
     let parsed = parse_accounting(&input, "cispa", "42").unwrap();
     let elapsed = started.elapsed();
     assert_eq!(parsed.max_rss_bytes, 1024 * 1024 * 1024);
-    #[cfg(not(coverage))]
-    assert!(elapsed < Duration::from_millis(75));
+    assert!(elapsed < Duration::from_millis(if cfg!(coverage) { 300 } else { 75 }));
     eprintln!("parse 5k detail rows: {elapsed:?}");
 }

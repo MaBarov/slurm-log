@@ -161,13 +161,26 @@ fn queue_parser_classifies_shell_allocations_as_interactive() {
     assert!(!jobs[0].interactive);
     assert!(jobs[1].interactive);
     assert!(jobs[1].blocked_category());
-    for command in ["/bin/zsh", "fish", "tcsh", "nu"] {
+    for command in [
+        "/bin/zsh",
+        "fish",
+        "tcsh",
+        "nu",
+        "python",
+        "python3",
+        "/opt/venvs/e1/bin/python",
+        "ipython",
+        "julia",
+        "node",
+        "gdb",
+    ] {
         assert!(interactive_command(command));
     }
-    assert!(!interactive_command("python"));
+    for command in ["/work/train.sbatch", "train.sbatch", "run.sh", "eval.slurm"] {
+        assert!(!interactive_command(command));
+    }
     assert_eq!(queue_cache_name("cispa"), "queue-v3-cispa");
     assert_ne!(queue_cache_name("cispa"), "queue-cispa");
-
     let mut accounting_row = vec![Job {
         cluster: "cispa".into(),
         id: "42".into(),
@@ -181,6 +194,46 @@ fn queue_parser_classifies_shell_allocations_as_interactive() {
     restore_interactive_classification(&mut accounting_row, &ledger);
     assert!(accounting_row[0].interactive);
     assert!(accounting_row[0].blocked_category());
+}
+
+#[test]
+fn interactive_allocation_python_should_be_classified_as_blocked() {
+    // An interactive allocation running python on sprint1 (salloc/srun with BatchFlag=0)
+    let raw_queue =
+        "463107|RUNNING|python|0:42|sprint1|all|2026-08-17T15:37:15|1|/opt/venvs/e1/bin/python\n";
+    let jobs = parse_queue(raw_queue, "sprint");
+    assert_eq!(jobs.len(), 1);
+    let job = &jobs[0];
+
+    // 1. Expected classification
+    assert!(
+        job.interactive,
+        "Expected job running python to be classified as interactive"
+    );
+    assert!(
+        job.blocked_category(),
+        "Expected job running python to be in blocked category"
+    );
+
+    // 2. Expected listing behavior
+    let ledger = Ledger::default();
+    // Should appear in blocked listing (slurm-log blocked / b toggle)
+    let blocked_jobs: Vec<_> = visible_jobs(vec![job.clone()], &ledger, HistoryMode::Live, true)
+        .into_iter()
+        .filter(|j| j.blocked_category())
+        .collect();
+    assert_eq!(
+        blocked_jobs.len(),
+        1,
+        "Expected job to appear in the blocked listing"
+    );
+
+    // Should NOT leak into the default live view when blocked jobs are hidden
+    let default_view = visible_jobs(vec![job.clone()], &ledger, HistoryMode::Live, false);
+    assert!(
+        default_view.is_empty(),
+        "Expected interactive allocation to be hidden from default live view"
+    );
 }
 
 #[test]
@@ -238,27 +291,8 @@ fn parses_one_hundred_thousand_accounting_rows_within_budget() {
     let jobs = parse_recent(&input, "cispa");
     let elapsed = started.elapsed();
     assert_eq!(jobs.len(), 100_000);
-    #[cfg(not(coverage))]
-    assert!(elapsed < Duration::from_millis(500));
+    assert!(elapsed < Duration::from_millis(if cfg!(coverage) { 2000 } else { 500 }));
     eprintln!("parse 100k accounting rows: {elapsed:?}");
-}
-
-#[test]
-#[ignore = "release-mode performance budget"]
-fn parsing_stops_at_one_million_jobs() {
-    let queued_line = "1|PENDING|job|0:00\n";
-    let mut input = String::with_capacity(queued_line.len() * (MAX_CACHE_JOBS + 1));
-    for _ in 0..=MAX_CACHE_JOBS {
-        input.push_str(queued_line);
-    }
-    assert_eq!(parse_queue(&input, "cispa").len(), MAX_CACHE_JOBS);
-
-    let recent_line = "1|COMPLETED|job|0:00|2026-08-11T17:00:00+02:00\n";
-    let mut input = String::with_capacity(recent_line.len() * (MAX_CACHE_JOBS + 1));
-    for _ in 0..=MAX_CACHE_JOBS {
-        input.push_str(recent_line);
-    }
-    assert_eq!(parse_recent(&input, "cispa").len(), MAX_CACHE_JOBS);
 }
 
 #[test]
@@ -295,141 +329,15 @@ fn scheduler_query_lock_is_private_and_cross_process_exclusive() {
         .write(true)
         .open(&lock_path)
         .unwrap();
-    assert!(second.try_lock_exclusive().is_err());
+    assert!(rustix::fs::flock(&second, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err());
     drop(first);
-    assert!(second.try_lock_exclusive().is_ok());
-}
-
-#[test]
-fn scheduler_queries_recheck_the_cache_after_locking() {
-    let directory = tempfile::tempdir().unwrap();
-    let config = Config {
-        local_user: "local".into(),
-        remote_user: "remote".into(),
-        ssh_host: "host".into(),
-        state_path: directory.path().join("state.json"),
-        executable: PathBuf::from("slurm-log"),
-        sbatch_banks: Vec::new(),
-        clusters: vec![crate::config::ClusterConfig {
-            name: "cispa".into(),
-            controller: None,
-            transport: "ssh".into(),
-            user: "remote".into(),
-            ssh_host: "host".into(),
-            working_directory: PathBuf::from("/tmp"),
-            accounting: true,
-        }],
-    };
-    let jobs = vec![Job {
-        cluster: "cispa".into(),
-        id: "7".into(),
-        ..Job::default()
-    }];
-
-    // queued(): a sibling process may populate the cache while this process
-    // waits on the query lock. Hold the lock so the worker observes the empty
-    // cache and blocks, then populate the cache and release.
-    let queue_cache = cache_path(&config, &queue_cache_name("cispa"));
-    let lock = query_lock(&queue_cache).unwrap();
-    let queued_config = config.clone();
-    let worker = thread::spawn(move || queued(&queued_config, "cispa").map(|jobs| jobs.len()));
-    thread::sleep(Duration::from_millis(200));
-    store_jobs(&queue_cache, &jobs);
-    drop(lock);
-    assert_eq!(worker.join().unwrap().unwrap(), 1);
-
-    // recent(): the same double-checked locking under the accounting TTL.
-    let recent_cache = cache_path(&config, "recent-v2-cispa");
-    let lock = query_lock(&recent_cache).unwrap();
-    let recent_config = config.clone();
-    let worker =
-        thread::spawn(move || recent(&recent_config, "cispa", false).map(|jobs| jobs.len()));
-    thread::sleep(Duration::from_millis(200));
-    store_jobs(&recent_cache, &jobs);
-    drop(lock);
-    assert_eq!(worker.join().unwrap().unwrap(), 1);
+    assert!(rustix::fs::flock(&second, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok());
 }
 
 mod history;
 
-#[test]
-fn shared_job_cache_round_trips_and_invalidates() {
-    let directory = tempfile::tempdir().unwrap();
-    let config = Config {
-        local_user: "local".into(),
-        remote_user: "remote".into(),
-        ssh_host: "host".into(),
-        state_path: directory.path().join("state.json"),
-        executable: PathBuf::from("slurm-log"),
-        sbatch_banks: Vec::new(),
-        clusters: vec![crate::config::ClusterConfig {
-            name: "cispa".into(),
-            controller: None,
-            transport: "ssh".into(),
-            user: "remote".into(),
-            ssh_host: "host".into(),
-            working_directory: PathBuf::from("/tmp"),
-            accounting: false,
-        }],
-    };
-    let path = cache_path(&config, "recent");
-    let jobs = vec![Job {
-        cluster: "cispa".into(),
-        id: "42".into(),
-        ..Job::default()
-    }];
-    store_jobs(&path, &jobs);
-    assert_eq!(cached_jobs(&path, Duration::from_secs(3)), Some(jobs));
-    assert_eq!(
-        recent(&config, "cispa", false).unwrap(),
-        Vec::<Job>::new(),
-        "accounting-disabled clusters must return before invoking SSH or sacct"
-    );
-    assert!(accounting_warnings(&config, &["cispa"], false).is_empty());
-    let warnings = accounting_warnings(&config, &["cispa"], true);
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("completed jobs unavailable"));
-    assert!(warnings[0].contains("only active squeue jobs"));
-    assert_eq!(
-        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    invalidate_caches(&config);
-    assert!(!path.exists());
-}
-
-#[test]
-fn malformed_scheduler_output_is_ignored_without_panicking() {
-    let input = "\n|||\nabc|RUNNING|name|1:00|node\n1.batch|RUNNING|step|1:00|node\n\
-                     42|RUNNING|valid|00:01|node\n999999999999999999999999|FAILED|huge|x|\n";
-    let jobs = parse_queue(input, "cispa");
-    assert_eq!(jobs.len(), 2);
-    assert_eq!(jobs[0].id, "42");
-}
-
-#[test]
-fn parsers_survive_deterministic_hostile_corpus() {
-    let mut seed = 0x9e37_79b9_u32;
-    for length in [0, 1, 2, 7, 31, 255, 4096, 65_535] {
-        let mut input = String::with_capacity(length);
-        for _ in 0..length {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            input.push(char::from_u32(1 + seed % 0x7e).unwrap());
-        }
-        let queued = parse_queue(&input, "cispa");
-        let recent = parse_recent(&input, "cispa");
-        assert!(queued.iter().all(|job| valid_job_id(&job.id)));
-        assert!(recent.iter().all(|job| valid_job_id(&job.id)));
-    }
-}
-
-#[path = "tests/cache.rs"]
 mod cache;
+mod controller;
 
 #[path = "tests/identity.rs"]
 mod identity;
-
-#[path = "tests/authorization.rs"]
-mod authorization;

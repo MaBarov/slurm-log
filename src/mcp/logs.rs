@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 use rmcp::model::JsonObject;
@@ -62,6 +60,9 @@ impl McpServer {
         let (cluster, id) = exact_job(&self.config, args)?;
         crate::slurm::authorize_exact_job(&self.config, cluster, id)?;
         let pattern = required_string(args, "pattern")?;
+        if pattern.len() > 1024 {
+            bail!("pattern exceeds 1024 bytes");
+        }
         let regex = optional_bool(args, "regex").unwrap_or(false);
         let maximum = optional_usize(args, "max_matches", 100)?.clamp(1, 500);
         let context = optional_usize(args, "context_lines", 2)?.min(20);
@@ -84,30 +85,42 @@ impl McpServer {
                 }
             }
         }
-        let mut selected = BTreeSet::new();
-        for index in &matching {
-            for item in index.saturating_sub(context)
-                ..=(*index + context).min(lines.len().saturating_sub(1))
+        let total_lines = lines.len();
+        let mut intervals: Vec<(usize, usize)> = Vec::with_capacity(matching.len());
+        for &index in &matching {
+            let start = index.saturating_sub(context);
+            let end = (index + context).min(total_lines.saturating_sub(1));
+            if let Some(last) = intervals.last_mut()
+                && start <= last.1 + 1
             {
-                selected.insert(item);
+                last.1 = last.1.max(end);
+                continue;
             }
+            intervals.push((start, end));
         }
         let mut matches = Vec::new();
         let mut output_bytes = 0_usize;
         let mut output_limited = false;
-        for index in selected {
-            let line = bounded_line(lines[index], 2000);
-            let cost = line.len().saturating_add(64);
-            if output_bytes.saturating_add(cost) > MAX_LOG_PAYLOAD {
-                output_limited = true;
-                break;
+        let mut match_idx = 0;
+        'collect: for (start, end) in intervals {
+            for (index, &raw_line) in lines.iter().enumerate().take(end + 1).skip(start) {
+                let line = bounded_line(raw_line, 2000);
+                let cost = line.len().saturating_add(64);
+                if output_bytes.saturating_add(cost) > MAX_LOG_PAYLOAD {
+                    output_limited = true;
+                    break 'collect;
+                }
+                output_bytes += cost;
+                while match_idx < matching.len() && matching[match_idx] < index {
+                    match_idx += 1;
+                }
+                let is_match = match_idx < matching.len() && matching[match_idx] == index;
+                matches.push(json!({
+                    "window_line": index + 1,
+                    "text": line,
+                    "matched": is_match
+                }));
             }
-            output_bytes += cost;
-            matches.push(json!({
-                "window_line":index + 1,
-                "text":line,
-                "matched":matching.contains(&index)
-            }));
         }
         Ok(json!({
             "ok":true,"cluster":cluster,"job_id":id,"status":data.status,
@@ -290,33 +303,6 @@ fn findings(
             "high",
             &[state],
             "Inspect Slurm node reason and retry on a healthy allocation.",
-        );
-    }
-    if state.starts_with("CANCELLED") {
-        push_finding(
-            &mut found,
-            "job_cancelled",
-            "high",
-            &[state],
-            "Confirm whether the user, the scheduler, or a pending-time policy cancelled the job before resubmitting.",
-        );
-    }
-    let environment_evidence = evidence_lines(
-        text,
-        &[
-            "No module named",
-            "ModuleNotFoundError",
-            "command not found",
-        ],
-        3,
-    );
-    if !environment_evidence.is_empty() {
-        push_finding(
-            &mut found,
-            "environment_setup",
-            "medium",
-            &environment_evidence,
-            "Check that the required module, venv, or working directory was available inside the allocation.",
         );
     }
     found

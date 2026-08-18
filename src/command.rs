@@ -1,10 +1,14 @@
 use anyhow::{Context, Result, bail};
 use std::{
     cell::RefCell,
-    fs,
+    env, fs,
     io::{Read, Result as IoResult, Write},
-    os::unix::process::CommandExt,
-    path::Path,
+    os::unix::{
+        fs::{MetadataExt, PermissionsExt},
+        net::UnixStream,
+        process::CommandExt,
+    },
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{
         Arc,
@@ -14,7 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod resolver;
+use sha2::{Digest, Sha256};
+
+include!("command/mux.rs");
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -60,12 +66,30 @@ fn request_cancelled() -> bool {
 }
 
 fn command(program: &str) -> Command {
-    let mut command = Command::new(resolver::trusted_program(program));
+    let mut command = Command::new(program);
     // A child owns its own process group so deadline/cancellation can tear
     // down shell/SSH descendants that retain stdout or stderr pipes.
     command.process_group(0);
-    resolver::scrub_environment(&mut command);
+    scrub_scheduler_environment(&mut command);
     command
+}
+
+fn scrub_scheduler_environment(command: &mut Command) {
+    // sbatch/scancel honour several inherited option variables. They are not
+    // part of an MCP preview and therefore must not silently alter a submitted
+    // script, its target, or a cancellation request.
+    for (key, _) in env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("SBATCH_")
+            || name.starts_with("SCANCEL_")
+            || matches!(
+                name.as_ref(),
+                "SLURM_CLUSTERS" | "SLURM_HINT" | "SLURM_EXPORT_ENV"
+            )
+        {
+            command.env_remove(key);
+        }
+    }
 }
 
 fn wait_with_deadline(child: &mut Child, program: &str, deadline: Duration) -> Result<ExitStatus> {
@@ -106,12 +130,6 @@ fn terminate_process_group(child: &mut Child) {
 
 pub fn output(program: &str, args: &[&str]) -> Result<Output> {
     output_with_limit(program, args, MAX_COMMAND_OUTPUT_BYTES)
-}
-
-/// Like `output`, but with an explicit deadline. Used for best-effort metadata
-/// probes (for example git provenance) that must never stall the MCP worker.
-pub fn output_with_timeout(program: &str, args: &[&str], deadline: Duration) -> Result<Output> {
-    output_with_limit_and_timeout(program, args, MAX_COMMAND_OUTPUT_BYTES, deadline)
 }
 
 fn output_with_limit(program: &str, args: &[&str], limit: usize) -> Result<Output> {
@@ -232,111 +250,149 @@ fn text_with_input_limit(
     Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
-pub fn ssh(host: &str, remote: &str) -> Result<String> {
-    ssh_retry(host, remote, None)
-}
-
-pub fn ssh_with_input(host: &str, remote: &str, input: &[u8]) -> Result<String> {
-    ssh_retry(host, remote, Some(input))
-}
-
-/// A failed multiplexed connection often means the `ControlPath` socket is
-/// stale (for example a previous daemon exited without closing its master).
-/// Retry once after removing the exact socket this tool owns, then fall back
-/// to a plain connection without multiplexing so a lingering bad socket can
-/// never wedge every subsequent scheduler query.
-fn ssh_retry(host: &str, remote: &str, input: Option<&[u8]>) -> Result<String> {
-    match ssh_text(host, remote, input, true) {
-        Ok(value) => Ok(value),
-        Err(first) => {
-            if let Some(socket) = control_socket_path(host) {
-                let _ = fs::remove_file(&socket);
-            }
-            match ssh_text(host, remote, input, true) {
-                Ok(value) => Ok(value),
-                Err(_) => ssh_text(host, remote, input, false).map_err(|_| first),
-            }
-        }
-    }
-}
-
-fn ssh_text(host: &str, remote: &str, input: Option<&[u8]>, multiplex: bool) -> Result<String> {
-    let mut args = ssh_args(multiplex);
-    args.extend([host, remote]);
-    match input {
-        Some(input) => text_with_input("ssh", &args, input, None),
-        None => text("ssh", &args),
-    }
-}
-
-fn ssh_args(multiplex: bool) -> Vec<&'static str> {
-    let mut args = vec!["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"];
-    if multiplex {
-        args.extend([
-            "-o",
-            "ControlMaster=auto",
-            "-o",
-            "ControlPersist=120",
-            "-o",
-            "ControlPath=~/.ssh/slurm-log-%C",
-        ]);
-    }
-    args
-}
-
-/// Resolve the expanded `ControlPath` this tool would use for `host` without
-/// opening a connection (`ssh -G` only dumps the effective configuration).
-/// Only sockets owned by slurm-log (the `slurm-log-` prefix) are ever removed.
-fn control_socket_path(host: &str) -> Option<std::path::PathBuf> {
-    let out = output_with_timeout(
-        "ssh",
-        &["-G", "-o", "ControlPath=~/.ssh/slurm-log-%C", host],
-        Duration::from_secs(5),
-    )
-    .ok()?;
-    let raw = out
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout))?;
-    let path = raw.lines().find_map(|line| {
-        line.strip_prefix("controlpath ")
-            .map(str::trim)
-            .filter(|value| !value.is_empty() && *value != "none")
-    })?;
-    let expanded = path.replace('~', &std::env::var("HOME").unwrap_or_default());
-    let path = std::path::PathBuf::from(expanded);
-    let name = path.file_name().and_then(|value| value.to_str())?;
-    name.starts_with("slurm-log-").then_some(path)
-}
-
-/// Run a scheduler command through a deliberately small remote environment.
-/// The outer paths are absolute so a hostile remote login PATH cannot select a
-/// different `env` or shell; the inner scheduler lookup uses only the fixed
-/// administrator-controlled search path.
-pub fn remote_scheduler_command(program: &str, args: &[&str], directory: Option<&Path>) -> String {
-    let invocation = std::iter::once(shell_quote(program))
-        .chain(args.iter().map(|argument| shell_quote(argument)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let script = if let Some(directory) = directory {
-        format!(
-            "cd {} && exec {invocation}",
-            shell_quote(&directory.display().to_string())
-        )
-    } else {
-        format!("exec {invocation}")
-    };
-    format!(
-        "/usr/bin/env -i PATH={} HOME=/ /bin/sh -c {}",
-        shell_quote(REMOTE_SCHEDULER_PATH),
-        shell_quote(&script)
-    )
-}
-
 pub fn shell_quote(value: &str) -> String {
     shell_words::quote(value).into_owned()
 }
 
 #[cfg(test)]
-#[path = "command/tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quote_round_trips_adversarial_values() {
+        for value in [
+            "simple",
+            "with spaces",
+            "single'quote",
+            "$(touch /tmp/never)",
+            "; rm -rf nope",
+            "line1\nline2",
+            "unicode-λ",
+        ] {
+            let script = format!("printf %s {}", shell_quote(value));
+            let output = text("sh", &["-c", &script]).unwrap();
+            assert_eq!(output, value);
+        }
+    }
+
+    #[test]
+    fn remote_scheduler_wrapper_uses_fixed_paths_and_quotes_arguments() {
+        let command = remote_scheduler_command(
+            "sbatch",
+            &[
+                "--parsable",
+                "--clusters",
+                "controller-a",
+                "$(not-expanded)",
+            ],
+            Some(Path::new("/work space")),
+        );
+        assert!(
+            command.starts_with(
+                "/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/ /bin/sh -c "
+            )
+        );
+        assert!(command.contains("/bin/sh"));
+        assert!(!command.contains("${PATH"));
+        assert!(!command.contains("$PATH"));
+        assert!(command.contains("'$(not-expanded)'"));
+    }
+
+    #[test]
+    fn failed_commands_return_stderr() {
+        let error = text("sh", &["-c", "printf denied >&2; exit 7"]).unwrap_err();
+        assert!(format!("{error:#}").contains("denied"));
+    }
+
+    #[test]
+    fn oversized_stdout_and_stderr_are_drained_then_rejected() {
+        for script in [
+            "i=0; while [ $i -lt 200 ]; do printf 0123456789; i=$((i+1)); done",
+            "i=0; while [ $i -lt 200 ]; do printf 0123456789 >&2; i=$((i+1)); done",
+        ] {
+            let error = output_with_limit("sh", &["-c", script], 1024).unwrap_err();
+            assert!(format!("{error:#}").contains("safety limit"));
+        }
+    }
+
+    #[test]
+    fn bounded_input_command_preserves_bytes_and_working_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = text_with_input(
+            "sh",
+            &["-c", "printf '%s|' \"$PWD\"; cat"],
+            b"exact\0bytes\n",
+            Some(directory.path()),
+        )
+        .unwrap();
+        assert_eq!(
+            output.as_bytes(),
+            [
+                directory.path().as_os_str().as_encoded_bytes(),
+                b"|exact\0bytes\n"
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn bounded_input_command_reports_failures_and_output_overflow() {
+        let error = text_with_input_limit(
+            "sh",
+            &["-c", "cat >/dev/null; printf rejected >&2; exit 9"],
+            b"input",
+            None,
+            1024,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("rejected"));
+
+        let error = text_with_input_limit(
+            "sh",
+            &["-c", "cat >/dev/null; printf 0123456789"],
+            b"input",
+            None,
+            4,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("safety limit"));
+    }
+
+    #[test]
+    fn deadline_kills_descendants_that_hold_the_output_pipe() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("descendant.pid");
+        let started = Instant::now();
+        let output = output_with_limit_and_timeout(
+            "sh",
+            &[
+                "-c",
+                "sleep 30 & printf '%s' \"$!\" > \"$1\"; printf ready",
+                "sh",
+                pid_file.to_str().unwrap(),
+            ],
+            1024,
+            Duration::from_millis(250),
+        )
+        .unwrap();
+        assert_eq!(output.stdout, b"ready");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let pid = std::fs::read_to_string(pid_file).unwrap();
+        let process = Path::new("/proc").join(pid.trim());
+        for _ in 0..20 {
+            if !process.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!process.exists(), "background descendant survived cleanup");
+    }
+
+    #[test]
+    fn ssh_control_path_uses_private_runtime_and_reproducible_tokens() {
+        let path1 = ssh_control_path("login.cluster.local");
+        let path2 = ssh_control_path("login.cluster.local");
+        assert_eq!(path1, path2);
+        assert!(path1.to_string_lossy().contains("slurm-log-"));
+    }
+}

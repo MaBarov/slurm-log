@@ -178,8 +178,10 @@ fn script_origin_uses_cluster_prefixes_and_keeps_ambiguous_files_shared() {
         name: "job".into(),
         directives: Vec::new(),
         origin: None,
-        declared_results: Vec::new(),
         bytes: Vec::new(),
+        bank_fingerprint: 0,
+        indexed_at: 0,
+        repo_commit: None,
     };
     assert_eq!(
         infer_script_origin(&script("cluster/cispa_train.sbatch"), &config).as_deref(),
@@ -196,44 +198,6 @@ fn script_origin_uses_cluster_prefixes_and_keeps_ambiguous_files_shared() {
 }
 
 #[test]
-fn submit_confirmation_uses_crlf_for_every_terminal_line() {
-    let config = test_config(Vec::new());
-    let script = Script {
-        bank: "bank".into(),
-        relative: PathBuf::from("train.sbatch"),
-        name: "train".into(),
-        directives: vec!["--gpus=2".into(), "--time=1:00:00".into()],
-        origin: None,
-        declared_results: Vec::new(),
-        bytes: Vec::new(),
-    };
-    let text = submit_confirmation(&script, &config.clusters[0]);
-    assert!(text.as_bytes().iter().enumerate().all(
-            |(index, byte)| *byte != b'\n' || index > 0 && text.as_bytes()[index - 1] == b'\r'
-        ));
-    assert!(text.contains("submit and open its pane"));
-    assert_eq!(confirmation_choice(KeyCode::Char('y')), Some(true));
-    assert_eq!(confirmation_choice(KeyCode::Esc), Some(false));
-    assert_eq!(confirmation_choice(KeyCode::Char('a')), None);
-}
-
-#[test]
-fn selected_submission_target_is_obvious_in_cluster_tabs() {
-    let mut config = test_config(Vec::new());
-    config.clusters.push(ClusterConfig {
-        name: "remote".into(),
-        controller: None,
-        transport: "ssh".into(),
-        user: "alice".into(),
-        ssh_host: "remote".into(),
-        working_directory: PathBuf::from("/work"),
-        accounting: true,
-    });
-    assert_eq!(cluster_tabs(&config, 0), "[local]  remote");
-    assert_eq!(cluster_tabs(&config, 1), "local  [remote]");
-}
-
-#[test]
 fn bank_rows_cover_nested_expansion_cluster_filtering_and_search() {
     let script = |path: &str, origin: Option<&str>| Script {
         bank: "bank".into(),
@@ -241,8 +205,10 @@ fn bank_rows_cover_nested_expansion_cluster_filtering_and_search() {
         name: path.into(),
         directives: Vec::new(),
         origin: origin.map(str::to_string),
-        declared_results: Vec::new(),
         bytes: Vec::new(),
+        bank_fingerprint: 0,
+        indexed_at: 0,
+        repo_commit: None,
     };
     let scripts = vec![
         script("one/two/train.sbatch", None),
@@ -255,15 +221,21 @@ fn bank_rows_cover_nested_expansion_cluster_filtering_and_search() {
             name: "bank".into(),
             first: 0,
             last: 3,
-            path: PathBuf::from("/tmp/bank"),
-            available: true,
+            path: PathBuf::new(),
+            error: None,
+            indexed_at: 0,
+            repo_commit: None,
+            fingerprint: 0,
         },
         LoadedBank {
             name: "remote".into(),
             first: 3,
             last: 4,
-            path: PathBuf::from("/tmp/remote"),
-            available: true,
+            path: PathBuf::new(),
+            error: None,
+            indexed_at: 0,
+            repo_commit: None,
+            fingerprint: 0,
         },
     ];
 
@@ -320,16 +292,20 @@ fn private_bank_cache_round_trips_without_changing_payload() {
             name: "run".into(),
             directives: vec!["--gpus=1".into()],
             origin: None,
-            declared_results: Vec::new(),
             bytes: b"#!/bin/sh\n".to_vec(),
+            bank_fingerprint: 0,
+            indexed_at: 0,
+            repo_commit: None,
         }],
         warnings: Vec::new(),
         error: None,
+        indexed_at: 0,
+        repo_commit: None,
     };
     store_bank_cache(&config, &root, &payload);
     let cached = load_bank_cache(&config, &root).unwrap();
-    assert_eq!(cached.name, "bank");
-    assert_eq!(cached.scripts[0].bytes, b"#!/bin/sh\n");
+    assert_eq!(cached.0.name, "bank");
+    assert_eq!(cached.0.scripts[0].bytes, b"#!/bin/sh\n");
     assert_eq!(
         fs::metadata(bank_cache_path(&config, &root))
             .unwrap()
@@ -358,6 +334,8 @@ fn bank_cache_invalidates_nested_additions_changes_and_removals() {
                 scripts,
                 warnings,
                 error: None,
+                indexed_at: 0,
+                repo_commit: None,
             },
         );
         assert!(load_bank_cache(&config, &root).is_some());
@@ -393,20 +371,23 @@ fn loads_twenty_thousand_cached_scripts_within_budget() {
                 name: format!("job-{id}"),
                 directives: vec!["--time=1:00:00".into()],
                 origin: None,
-                declared_results: Vec::new(),
                 bytes: b"#!/bin/sh\n#SBATCH --time=1:00:00\n".to_vec(),
+                bank_fingerprint: 0,
+                indexed_at: 0,
+                repo_commit: None,
             })
             .collect(),
         warnings: Vec::new(),
         error: None,
+        indexed_at: 0,
+        repo_commit: None,
     };
     store_bank_cache(&config, &root, &payload);
     let started = Instant::now();
     let cached = load_bank_cache(&config, &root).unwrap();
     let elapsed = started.elapsed();
-    assert_eq!(cached.scripts.len(), 20_000);
-    #[cfg(not(coverage))]
-    assert!(elapsed < Duration::from_millis(150));
+    assert_eq!(cached.0.scripts.len(), 20_000);
+    assert!(elapsed < Duration::from_millis(if cfg!(coverage) { 600 } else { 150 }));
     eprintln!("load 20k cached scripts: {elapsed:?}");
 }
 
@@ -420,8 +401,10 @@ fn builds_twenty_thousand_bank_rows_within_budget() {
             name: format!("job-{index}"),
             directives: Vec::new(),
             origin: None,
-            declared_results: Vec::new(),
             bytes: Vec::new(),
+            bank_fingerprint: 0,
+            indexed_at: 0,
+            repo_commit: None,
         })
         .collect();
     let mut expanded: HashSet<_> = (0..100)
@@ -432,8 +415,11 @@ fn builds_twenty_thousand_bank_rows_within_budget() {
         name: "bank".into(),
         first: 0,
         last: scripts.len(),
-        path: PathBuf::from("/tmp/bank"),
-        available: true,
+        path: PathBuf::new(),
+        error: None,
+        indexed_at: 0,
+        repo_commit: None,
+        fingerprint: 0,
     }];
     let index_started = std::time::Instant::now();
     let index = BankIndex::new(&banks, &scripts, ["local"]);
@@ -441,9 +427,9 @@ fn builds_twenty_thousand_bank_rows_within_budget() {
     let started = std::time::Instant::now();
     assert_eq!(index.rows(&scripts, &expanded, "", "local").len(), 20_101);
     let elapsed = started.elapsed();
-    #[cfg(not(coverage))]
-    assert!(index_elapsed < std::time::Duration::from_millis(100));
-    #[cfg(not(coverage))]
-    assert!(elapsed < std::time::Duration::from_millis(20));
+    assert!(
+        index_elapsed < std::time::Duration::from_millis(if cfg!(coverage) { 400 } else { 100 })
+    );
+    assert!(elapsed < std::time::Duration::from_millis(if cfg!(coverage) { 100 } else { 20 }));
     eprintln!("index 20k scripts once: {index_elapsed:?}; rebuild rows: {elapsed:?}");
 }

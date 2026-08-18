@@ -11,6 +11,13 @@ fn cached(created: Instant, last_access: Instant, refreshing: bool) -> CachedRep
 }
 
 #[test]
+fn daemon_socket_peer_credentials_validate_same_process_uid() {
+    let (client, server) = UnixStream::pair().unwrap();
+    assert!(validate_peer_credentials(&server).is_ok());
+    assert!(validate_peer_credentials(&client).is_ok());
+}
+
+#[test]
 fn due_refresh_selection_respects_ttl_activity_and_in_flight_state() {
     let now = Instant::now();
     let mut entries = HashMap::from([

@@ -25,13 +25,10 @@ pub fn update(config: &Config, explicit_binary: Option<&str>) -> Result<()> {
     } else {
         None
     };
-    let candidate = if let Some(path) = explicit_binary {
-        PathBuf::from(path)
-    } else {
-        downloaded
-            .as_ref()
-            .expect("a release is always downloaded when no explicit binary is given")
-            .candidate_path()
+    let candidate = match (explicit_binary, downloaded.as_ref()) {
+        (Some(path), _) => PathBuf::from(path),
+        (None, Some(release)) => release.candidate_path(),
+        (None, None) => unreachable!(),
     };
     validate_candidate(&candidate)?;
 

@@ -41,13 +41,6 @@ printf '%s\n' "$publish_block" | grep -F 'name: release-signed' >/dev/null
 printf '%s\n' "$publish_block" | grep -F 'SLURM_LOG_RELEASE_PUBLIC_KEY_PEM' >/dev/null
 printf '%s\n' "$publish_block" | grep -F 'openssl pkeyutl -verify' >/dev/null
 printf '%s\n' "$publish_block" | grep -F '.manifest.sig' >/dev/null
-printf '%s\n' "$publish_block" | grep -F -- '--repo "$GITHUB_REPOSITORY"' >/dev/null
-
-# The one-line curl installer must travel with every release so that
-# `.../releases/latest/download/install.sh | bash` stays pinned to the signed
-# set published by the same workflow.
-printf '%s\n' "$sign_block" | grep -F 'install.sh' >/dev/null
-printf '%s\n' "$publish_block" | grep -F 'dist/install.sh' >/dev/null
 
 # A production public key is an immutable reviewed source input. The explicit
 # test-only compile flag is the sole fixture escape hatch.
@@ -66,12 +59,5 @@ grep -F 'include_str!("../release-public-key.pem")' "$project_dir/src/release_au
 grep -F 'SLURM_LOG_TEST_BUILD' "$project_dir/build.rs" >/dev/null
 grep -F 'SLURM_LOG_TEST_RELEASE_PUBLIC_KEY' "$project_dir/build.rs" >/dev/null
 test ! -e "$project_dir/src/bin/release-sign.rs"
-
-# The piped installer embeds the same reviewed trust anchor as the updater;
-# drift between install.sh and release-public-key.pem must fail this gate.
-key_line=$(sed -n '2p' "$key_file" | tr -d '\r')
-grep -F "'$key_line'" "$project_dir/install.sh" >/dev/null
-grep -F "'-----BEGIN PUBLIC KEY-----'" "$project_dir/install.sh" >/dev/null
-grep -F "'-----END PUBLIC KEY-----'" "$project_dir/install.sh" >/dev/null
 
 printf '%s\n' 'release_workflow: ok (pinned verification, no-Cargo signing, immutable trust anchor)'

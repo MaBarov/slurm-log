@@ -5,6 +5,7 @@ fn draw(
     activity: &str,
     cpu: &VecDeque<f64>,
     memory: &VecDeque<f64>,
+    gpu: &VecDeque<f64>,
 ) -> Result<()> {
     let mut out = Vec::new();
     execute!(out, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
@@ -134,6 +135,9 @@ fn draw(
     if !compact {
         line(&mut out, "CPU trend", &spark(cpu))?;
         line(&mut out, "Memory trend", &spark(memory))?;
+        if details.gpus > 0 && details.gpu_utilization.is_some() {
+            line(&mut out, "GPU trend", &spark(gpu))?;
+        }
         section(&mut out, Color::AnsiValue(179), "SCHEDULING & ACCOUNTING")?;
         line(&mut out, "Submit", &clean(&details.submit))?;
         line(
@@ -236,7 +240,7 @@ fn memory_usage(details: &JobDetails) -> String {
     {
         percent(details.memory_efficiency)
     } else if details.max_rss_bytes > 0 {
-        format!("{} peak (limit unknown)", bytes(details.max_rss_bytes))
+        format!("{} peak", bytes(details.max_rss_bytes))
     } else {
         "not available".into()
     }
@@ -265,14 +269,26 @@ fn bytes(value: u64) -> String {
     format!("{amount:.1} {}", UNITS[unit])
 }
 fn spark(values: &VecDeque<f64>) -> String {
+    spark_padded(values, 30)
+}
+
+
+fn spark_padded(values: &VecDeque<f64>, width: usize) -> String {
     const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    if values.is_empty() {
-        return "collecting…".into();
+    if width == 0 {
+        return String::new();
     }
-    values
-        .iter()
-        .map(|value| BARS[((value.clamp(0.0, 100.0) / 100.0 * 7.0).round() as usize).min(7)])
-        .collect()
+    let count = values.len().min(width);
+    let padding = width.saturating_sub(count);
+    let mut result = String::with_capacity(width * 4);
+    for _ in 0..padding {
+        result.push('·');
+    }
+    for &value in values.iter().skip(values.len() - count) {
+        let index = ((value.clamp(0.0, 100.0) * 0.07).round() as usize).min(7);
+        result.push(BARS[index]);
+    }
+    result
 }
 fn hint(details: &JobDetails) -> Option<String> {
     if details.gpus > 0 && details.gpu_utilization.is_none() {

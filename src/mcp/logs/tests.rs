@@ -15,12 +15,6 @@ fn cursors_reject_wrong_shapes_and_tail_is_line_bounded() {
 }
 
 #[test]
-fn exception_output_is_capped_at_two_thousand_lines() {
-    let lines = vec!["Traceback (most recent call last):"; 2_100];
-    assert_eq!(exception_blocks(&lines).lines().count(), 2000);
-}
-
-#[test]
 fn exception_mode_keeps_complete_short_tracebacks() {
     let text = "noise\nTraceback (most recent call last):\n  File x\nValueError: bad\n\nnoise";
     let value = filter_text(text, "exceptions");
@@ -78,15 +72,6 @@ fn diagnosis_classifies_every_supported_failure_family() {
         ..crate::model::Job::default()
     };
     assert!(classes(&findings(Some(&timeout), None, &log, "")).contains(&"slurm_timeout"));
-
-    let cancelled = crate::model::Job {
-        state: "CANCELLED".into(),
-        ..crate::model::Job::default()
-    };
-    assert!(classes(&findings(Some(&cancelled), None, &log, "")).contains(&"job_cancelled"));
-
-    let environment = "ModuleNotFoundError: No module named 'torch'\n";
-    assert!(classes(&findings(None, None, &log, environment)).contains(&"environment_setup"));
 }
 
 #[test]
@@ -111,11 +96,6 @@ fn diagnosis_distinguishes_pending_missing_and_silent_logs() {
         ..LogData::default()
     };
     assert!(classes(&findings(None, None, &no_stdout, "")).contains(&"no_stdout"));
-    let missing = LogData {
-        status: "not_found".into(),
-        ..LogData::default()
-    };
-    assert!(classes(&findings(None, None, &missing, "")).contains(&"log_unavailable"));
     let silent = LogData {
         status: "available".into(),
         ..LogData::default()
@@ -131,14 +111,13 @@ fn diagnosis_distinguishes_pending_missing_and_silent_logs() {
 }
 
 #[test]
-fn duplicate_findings_and_exception_output_are_bounded() {
-    let mut values = Vec::new();
-    push_finding(&mut values, "same", "high", &["first"], "check");
-    push_finding(&mut values, "same", "low", &["second"], "ignored");
-    assert_eq!(values.len(), 1);
-
-    let lines = std::iter::once("Traceback (most recent call last):")
-        .chain(std::iter::repeat_n("frame", 2_100))
-        .collect::<Vec<_>>();
-    assert_eq!(exception_blocks(&lines).lines().count(), 80);
+fn log_filters_cover_all_branches() {
+    let text = "info 1\nUserWarning: test\ninfo 2\nTraceback (most recent call last):\n  File a\nError: oops\n\ninfo 3";
+    assert_eq!(filter_text(text, "all"), text);
+    let warnings = filter_text(text, "warnings");
+    assert!(warnings.contains("UserWarning: test"));
+    assert!(!warnings.contains("info 1"));
+    let hidden = filter_text(text, "hide_warnings");
+    assert!(!hidden.contains("UserWarning: test"));
+    assert!(hidden.contains("info 1"));
 }

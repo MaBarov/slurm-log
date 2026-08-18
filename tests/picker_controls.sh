@@ -112,7 +112,7 @@ cat >"$config" <<EOF
 {
   "clusters": [
     {"name":"alpha","controller":"alpha","transport":"local","user":"offline","workingDirectory":"$test_root","accounting":true},
-    {"name":"broken","transport":"ssh","user":"offline","sshHost":"broken.invalid","workingDirectory":"/offline","accounting":true}
+    {"name":"beta","transport":"ssh","user":"offline","sshHost":"fake-cluster","workingDirectory":"$test_root","accounting":false}
   ],
   "sbatchBanks": [{"path":"$test_root/bank","name":"Fixtures"}],
   "statePath":"$state"

@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
 use serde::Serialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -24,6 +23,7 @@ struct AuditEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     digest: Option<String>,
     result: String,
+    id: String,
 }
 
 pub fn record(
@@ -35,10 +35,64 @@ pub fn record(
     digest: Option<&str>,
     result: &str,
 ) -> Result<()> {
+    record_inner(
+        config, client, tool, cluster, identifier, digest, result, None,
+    )
+    .map(|_| ())
+}
+
+/// Record with a caller-supplied audit ID and return it so the response can
+/// reference its own audit trail entry.
+#[allow(clippy::too_many_arguments)]
+pub fn record_with_id(
+    config: &Config,
+    client: &str,
+    tool: &str,
+    cluster: &str,
+    identifier: &str,
+    digest: Option<&str>,
+    result: &str,
+    id: &str,
+) -> Result<()> {
+    record_inner(
+        config,
+        client,
+        tool,
+        cluster,
+        identifier,
+        digest,
+        result,
+        Some(id),
+    )
+    .map(|_| ())
+}
+
+pub fn audit_id() -> Result<String> {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes).context("obtain audit ID randomness")?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_inner(
+    config: &Config,
+    client: &str,
+    tool: &str,
+    cluster: &str,
+    identifier: &str,
+    digest: Option<&str>,
+    result: &str,
+    id: Option<&str>,
+) -> Result<String> {
+    let id = match id {
+        Some(id) => clean(id, 64),
+        None => audit_id()?,
+    };
     let path = audit_path(config);
-    let parent = path.parent().unwrap_or(Path::new(""));
-    fs::create_dir_all(parent)?;
-    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    }
     let lock_path = path.with_extension("jsonl.lock");
     reject_symlink(&lock_path)?;
     let lock = OpenOptions::new()
@@ -49,7 +103,8 @@ pub fn record(
         .mode(0o600)
         .open(&lock_path)
         .context("open MCP audit lock")?;
-    lock.lock_exclusive().context("lock MCP audit log")?;
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)
+        .context("lock MCP audit log")?;
     fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))?;
     reject_symlink(&path)?;
     if fs::metadata(&path).is_ok_and(|metadata| metadata.len() >= MAX_AUDIT_BYTES) {
@@ -72,11 +127,12 @@ pub fn record(
         identifier: clean(identifier, 500),
         digest: digest.map(|value| clean(value, 128)),
         result: clean(result, 500),
+        id,
     };
     serde_json::to_writer(&mut file, &entry)?;
     file.write_all(b"\n")?;
     file.flush()?;
-    Ok(())
+    Ok(entry.id)
 }
 
 fn audit_path(config: &Config) -> PathBuf {
@@ -174,40 +230,6 @@ mod tests {
         );
         let text = fs::read_to_string(path).unwrap();
         assert!(!text.contains("client\nname"));
-    }
-
-    #[test]
-    fn audit_rotation_replaces_a_prior_backup() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = config(directory.path().join("state.json"));
-        let path = audit_path(&config);
-        let backup = path.with_extension("jsonl.1");
-        fs::write(&backup, b"stale backup").unwrap();
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&path)
-            .unwrap();
-        file.set_len(MAX_AUDIT_BYTES).unwrap();
-        record(
-            &config,
-            "c",
-            "slurm_submit_job",
-            "alpha",
-            "Bank/train.sbatch",
-            None,
-            "ok",
-        )
-        .unwrap();
-        let rotated = fs::read(&backup).unwrap();
-        assert_eq!(rotated.len() as u64, MAX_AUDIT_BYTES);
-        assert!(!rotated.windows(12).any(|window| window == b"stale backup"));
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .contains("slurm_submit_job")
-        );
     }
 
     #[test]

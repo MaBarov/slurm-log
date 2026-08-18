@@ -22,10 +22,10 @@ fn interactive_frame(job: &Job, ended: bool) -> String {
     let prompt = match (ended, job.interactive) {
         (true, _) => "The allocation has ended. Press Enter to close this pane.",
         (false, true) => {
-            "Ctrl-b i details · Enter closes this monitor (the allocation keeps running)"
+            "Ctrl-b i details · Ctrl-b z zoom · Enter closes this monitor (the allocation keeps running)"
         }
         (false, false) => {
-            "Ctrl-b i details · Enter closes this monitor (the Slurm job remains active)"
+            "Ctrl-b i details · Ctrl-b z zoom · Enter closes this monitor (the Slurm job remains active)"
         }
     };
     if job.interactive {
@@ -57,7 +57,7 @@ fn render_monitor(frame: &str, previous: &mut String) -> io::Result<()> {
     if frame == previous {
         return Ok(());
     }
-    print!("\x1b[3J\x1b[2J\x1b[H{frame}");
+    print!("\x1b[H\x1b[J{frame}");
     io::stdout().flush()?;
     previous.clear();
     previous.push_str(frame);

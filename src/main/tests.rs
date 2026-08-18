@@ -47,7 +47,6 @@ fn cli_help_hides_internal_worker_commands() {
     let help = help_text();
     for internal in [
         "setup-discover-worker",
-        "setup-roots-worker",
         "bank-scan-worker",
         "pick-add",
         "toggle-details",

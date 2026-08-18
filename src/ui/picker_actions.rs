@@ -41,6 +41,7 @@
             }
             KeyCode::Esc if !query.is_empty() => {
                 query.clear();
+                set_notice(&mut notice, "Search cleared");
                 view_dirty = true;
                 popup_frame.clear();
             }
@@ -61,8 +62,11 @@
             KeyCode::Tab | KeyCode::BackTab if live_filter.is_some() => {
                 if let Some((cluster, _)) = &mut live_filter {
                     *cluster = cycle_cluster(config, cluster, matches!(key.code, KeyCode::BackTab));
+                    set_notice(
+                        &mut notice,
+                        &format!("Cluster: {cluster} (Tab next · Shift-Tab prev)"),
+                    );
                 }
-                query.clear();
                 catalog_dirty |= refresh(
                     config,
                     &live_filter,
@@ -85,24 +89,44 @@
                 if !rows.is_empty() && rows[focus].job.is_none() =>
             {
                 expanded.insert(rows[focus].name.clone());
+                set_notice(&mut notice, "Group expanded (← collapse · i details on job)");
                 view_dirty = true;
             }
             KeyCode::Left | KeyCode::Char('h') if !rows.is_empty() => {
-                view_dirty = expanded.remove(&rows[focus].name);
+                if expanded.remove(&rows[focus].name) {
+                    set_notice(&mut notice, "Group collapsed (→ expand · Space mark all)");
+                    view_dirty = true;
+                }
             }
             KeyCode::Char(' ') if !rows.is_empty() => {
                 toggle(&mut selected, &jobs, &rows[focus].members);
                 remember_selected(&mut known_jobs, &jobs, &selected);
                 selection_dirty = true;
+                if selected.is_empty() {
+                    set_notice(&mut notice, "Selection cleared");
+                } else {
+                    set_notice(
+                        &mut notice,
+                        &format!("{} selected (Enter open · c clear)", selected.len()),
+                    );
+                }
             }
             KeyCode::Char('v') => {
                 selected.extend(indices.iter().map(|&index| jobs[index].key()));
                 remember_selected(&mut known_jobs, &jobs, &selected);
                 selection_dirty = true;
+                set_notice(
+                    &mut notice,
+                    &format!("Selected all {} visible job(s) (Enter open · c clear)", selected.len()),
+                );
             }
             KeyCode::Char('c') => {
+                let previous_count = selected.len();
                 selected.clear();
                 selection_dirty = true;
+                if previous_count > 0 {
+                    set_notice(&mut notice, "Selection cleared (Space mark · v all)");
+                }
             }
             KeyCode::Char('d') if !rows.is_empty() => {
                 if history_mode != HistoryMode::Live {
@@ -320,6 +344,8 @@
             }
             KeyCode::Char('W') => {
                 show_log_warnings = !show_log_warnings;
+                let _ = Ledger::set_log_warnings(&config.state_path, show_log_warnings);
+                ledger.log_warnings_default = show_log_warnings;
                 set_notice(
                     &mut notice,
                     if show_log_warnings {
@@ -358,7 +384,7 @@
                     &mut ledger,
                     &mut warnings,
                 );
-                set_notice(&mut notice, "Scheduler refreshed");
+                set_notice(&mut notice, "Scheduler refreshed (r refresh · o history)");
                 view_dirty = true;
             }
             KeyCode::Char('/') => {

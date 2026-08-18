@@ -29,7 +29,7 @@ fn wide_header_is_the_compact_control_strip() {
     );
     assert_eq!(
         lines[1],
-        "↑↓ move  ·  Space mark  ·  Enter open  ·  / find  ·  ? help  ·  q quit"
+        "↑↓ move  ·  Space mark  ·  Enter open  ·  i details  ·  s submit  ·  d dismiss  ·  / find  ·  ? help  ·  q quit"
     );
     assert!(lines[2].chars().all(|character| character == '─'));
     assert_eq!(UnicodeWidthStr::width(lines[2].as_str()), 119);
@@ -131,6 +131,17 @@ fn unicode_cell_width_and_ellipsis_are_correct() {
     assert!(rendered.contains("界\x1b[0m  "));
 }
 
+#[test]
+fn truncate_display_handles_ascii_fast_path_and_boundary_widths() {
+    assert_eq!(truncate_display("hello", 10), "hello");
+    assert_eq!(truncate_display("hello", 5), "hello");
+    assert_eq!(truncate_display("hello", 4), "hel…");
+    assert_eq!(truncate_display("hello", 2), "h…");
+    assert_eq!(truncate_display("hello", 1), "…");
+    assert_eq!(truncate_display("hello", 0), "");
+    assert_eq!(truncate_display("🦀crab🦀", 5), "🦀cr…");
+    assert_eq!(truncate_display("München", 5), "Münc…");
+}
 fn table_job() -> Job {
     Job {
         cluster: "cispa".into(),
@@ -198,19 +209,6 @@ fn verbose_footer_stays_on_one_row_and_prioritizes_blocked_status() {
 }
 
 #[test]
-fn footer_flattens_multiline_scheduler_errors() {
-    let warning = " | sprint: squeue: error: Problem talking to database\n\
-                   squeue: error: 'sprint' can't be reached\r\n\
-                   \u{1b}[31mcontroller unavailable\u{1b}[0m";
-    let line = footer_line(200, 0, 0, "", warning, "", 0, false);
-
-    assert!(line.contains("Problem talking to database squeue: error: 'sprint' can't be reached"));
-    assert!(line.contains("[31mcontroller unavailable[0m"));
-    assert!(!line.contains(char::is_control));
-    assert!(UnicodeWidthStr::width(line.as_str()) < 200);
-}
-
-#[test]
 fn footer_reserves_the_terminal_final_column_for_wrap_safety() {
     for width in [44, 80, 120] {
         let line = footer_line(
@@ -226,4 +224,112 @@ fn footer_reserves_the_terminal_final_column_for_wrap_safety() {
         assert!(UnicodeWidthStr::width(line.as_str()) < width as usize);
         assert!(!line.contains(['\r', '\n']));
     }
+}
+
+#[test]
+fn blocked_status_chip_and_footer_toggle_accurately_reflect_visibility_state() {
+    // 1. When blocked jobs are HIDDEN (show_blocked = false):
+    let hidden_header = picker_header_lines(
+        120,
+        20,
+        false,
+        HistoryMode::Live,
+        true,
+        false,
+        false,
+        "all",
+        5,
+    );
+    let hidden_plain = plain(&hidden_header);
+    assert!(
+        hidden_plain[0].contains("[b BLOCKED 5 HIDDEN]"),
+        "Header must indicate 5 blocked jobs are hidden: {}",
+        hidden_plain[0]
+    );
+
+    let hidden_footer = footer_line(120, 10, 0, "", "", "", 5, false);
+    assert!(
+        hidden_footer.contains("blocked: 5 (b to show)"),
+        "Footer must show '(b to show)' when blocked jobs are hidden: {hidden_footer}"
+    );
+
+    // 2. When blocked jobs are SHOWN (show_blocked = true):
+    let shown_header = picker_header_lines(
+        120,
+        20,
+        false,
+        HistoryMode::Live,
+        true,
+        true,
+        false,
+        "all",
+        5,
+    );
+    let shown_plain = plain(&shown_header);
+    assert!(
+        shown_plain[0].contains("[b BLOCKED 5 SHOWN]"),
+        "Header must indicate 5 blocked jobs are shown: {}",
+        shown_plain[0]
+    );
+
+    let shown_footer = footer_line(120, 15, 0, "", "", "", 5, true);
+    assert!(
+        shown_footer.contains("blocked: 5 (shown)"),
+        "Footer must show 'blocked: 5 (shown)' when blocked jobs are shown: {shown_footer}"
+    );
+
+    // 3. When there are 0 blocked jobs:
+    let zero_header = picker_header_lines(
+        120,
+        20,
+        false,
+        HistoryMode::Live,
+        true,
+        false,
+        false,
+        "all",
+        0,
+    );
+    let zero_plain = plain(&zero_header);
+    assert!(
+        zero_plain[0].contains("[b BLOCKED 0 HIDDEN]"),
+        "Header must show '[b BLOCKED 0 HIDDEN]' when 0 blocked jobs exist: {}",
+        zero_plain[0]
+    );
+
+    let zero_footer = footer_line(120, 10, 0, "", "", "", 0, false);
+    assert!(
+        zero_footer.contains("blocked: 0 (b to show)"),
+        "Footer must show 'blocked: 0 (b to show)' when count is 0: {zero_footer}"
+    );
+}
+
+#[test]
+fn adaptive_command_hints_scale_gracefully_with_terminal_width() {
+    // 1. Extra-wide terminal (>= 115 cols): shows details, submit, and dismiss
+    let wide = header(120, 20);
+    let wide_plain = plain(&wide);
+    assert!(wide_plain[1].contains("i details"));
+    assert!(wide_plain[1].contains("s submit"));
+    assert!(wide_plain[1].contains("d dismiss"));
+
+    // 2. Wide terminal (100 cols): shows details and submit
+    let mid_wide = header(100, 20);
+    let mid_wide_plain = plain(&mid_wide);
+    assert!(mid_wide_plain[1].contains("i details"));
+    assert!(mid_wide_plain[1].contains("s submit"));
+    assert!(!mid_wide_plain[1].contains("d dismiss"));
+
+    // 3. Standard terminal (84 cols): shows details
+    let std = header(84, 20);
+    let std_plain = plain(&std);
+    assert!(std_plain[1].contains("i details"));
+    assert!(!std_plain[1].contains("s submit"));
+
+    // 4. Footer selection hint when items are selected
+    let selected_footer = footer_line(120, 10, 3, "", "", "", 0, false);
+    assert!(
+        selected_footer.contains("3 selected (Enter open · c clear)"),
+        "Footer must show '(Enter open · c clear)' when items are selected: {selected_footer}"
+    );
 }

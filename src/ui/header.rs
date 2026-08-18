@@ -60,10 +60,22 @@ fn command_rows(width: usize, manage: bool, labelled_rows: bool) -> Vec<HeaderLi
         command("↑↓", "move"),
         command("Space", "mark"),
         command("Enter", if manage { "apply" } else { "open" }),
+    ];
+    if width >= 115 {
+        commands.push(command("i", "details"));
+        commands.push(command("s", "submit"));
+        commands.push(command("d", "dismiss"));
+    } else if width >= 95 {
+        commands.push(command("i", "details"));
+        commands.push(command("s", "submit"));
+    } else if width >= 80 {
+        commands.push(command("i", "details"));
+    }
+    commands.extend([
         command("/", "find"),
         command("?", "help"),
         command("q", "quit"),
-    ];
+    ]);
     let prefix = if labelled_rows { "KEYS    " } else { "" };
     let continuation = " ".repeat(UnicodeWidthStr::width(prefix));
     let separator = if labelled_rows { " · " } else { "  ·  " };
@@ -95,6 +107,19 @@ fn normalized_cluster(cluster: &str, max_width: usize) -> String {
 }
 
 fn truncate_display(text: &str, max_width: usize) -> String {
+    if text.is_ascii() {
+        if text.len() <= max_width {
+            return text.to_string();
+        }
+        if max_width <= 1 {
+            return "…".repeat(max_width);
+        }
+        let mut value = String::with_capacity(max_width + 2);
+        value.push_str(&text[..max_width - 1]);
+        value.push('…');
+        return value;
+    }
+
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
     }

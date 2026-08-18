@@ -63,25 +63,25 @@ struct CancelMetadata {
 
 impl CancelMetadata {
     fn from_scontrol(value: &str) -> Result<Self> {
-        let id = scontrol_value(value, "JobId=")
+        let id = crate::model::token(value, "JobId=")
             .context("fresh controller metadata has no JobId")?
             .to_string();
         let owner_field =
-            scontrol_value(value, "UserId=").context("fresh controller metadata has no UserId")?;
+            crate::model::token(value, "UserId=").context("fresh controller metadata has no UserId")?;
         let owner = owner_field
             .split_once('(')
             .map_or(owner_field, |(name, _)| name)
             .to_string();
-        let name = scontrol_value(value, "JobName=")
+        let name = crate::model::token(value, "JobName=")
             .context("fresh controller metadata has no JobName")?
             .to_string();
-        let state = scontrol_value(value, "JobState=")
+        let state = crate::model::token(value, "JobState=")
             .context("fresh controller metadata has no JobState")?
             .to_string();
-        let array_job_id = scontrol_value(value, "ArrayJobId=")
+        let array_job_id = crate::model::token(value, "ArrayJobId=")
             .filter(|value| !matches!(*value, "" | "0" | "N/A" | "(null)"))
             .map(str::to_string);
-        let array_task_id = scontrol_value(value, "ArrayTaskId=")
+        let array_task_id = crate::model::token(value, "ArrayTaskId=")
             .filter(|value| !matches!(*value, "" | "N/A" | "(null)"))
             .map(str::to_string);
         Ok(Self {
@@ -117,10 +117,4 @@ impl CancelMetadata {
             }
         }
     }
-}
-
-fn scontrol_value<'a>(value: &'a str, key: &str) -> Option<&'a str> {
-    value
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix(key))
 }

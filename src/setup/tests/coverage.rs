@@ -82,23 +82,6 @@ fn wildcard_absolute_includes_and_ssh_include_failures_are_safe() {
 }
 
 #[test]
-fn ssh_alias_home_lookup_fails_safely_without_home() {
-    assert!(ssh_config_aliases_from_home(None).is_empty());
-    let directory = tempfile::tempdir().unwrap();
-    let home = directory.path().as_os_str().to_os_string();
-    fs::create_dir_all(directory.path().join(".ssh")).unwrap();
-    fs::write(directory.path().join(".ssh/config"), "").unwrap();
-    assert!(ssh_config_aliases_from_home(Some(home)).is_empty());
-}
-
-#[test]
-fn ssh_config_directory_fails_safely() {
-    let directory = tempfile::tempdir().unwrap();
-    fs::create_dir_all(directory.path().join(".ssh/config")).unwrap();
-    assert!(ssh_config_aliases_from(directory.path()).is_empty());
-}
-
-#[test]
 fn unreadable_discovery_directories_and_broken_output_sinks_do_not_hang() {
     use std::os::unix::fs::PermissionsExt;
 

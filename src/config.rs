@@ -12,13 +12,23 @@ pub struct ClusterConfig {
     /// that behaviour while allowing a label to differ from the controller.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller: Option<String>,
+    #[serde(default = "transport_default")]
     pub transport: String,
     pub user: String,
-    #[serde(default)]
+    #[serde(default, alias = "ssh_host")]
     pub ssh_host: String,
+    #[serde(default = "working_directory_default", alias = "working_directory")]
     pub working_directory: PathBuf,
     #[serde(default = "accounting_default")]
     pub accounting: bool,
+}
+
+fn transport_default() -> String {
+    "local".into()
+}
+
+fn working_directory_default() -> PathBuf {
+    home()
 }
 
 fn accounting_default() -> bool {
@@ -50,14 +60,9 @@ impl ClusterConfig {
         self.controller.as_deref().unwrap_or(&self.name)
     }
 
-    /// Whether this target can be passed explicitly to Slurm commands.
-    ///
-    /// `name` is a local display label, so no `--clusters` argument is
-    /// constructed unless a controller is explicitly configured. This applies
-    /// to remote targets too: a remote host may be single-cluster or name its
-    /// scheduler differently from the display label, and fabricating a
-    /// `--clusters <name>` argument for it produces a fatal scheduler error.
-    /// The SSH host still binds the remote target exactly.
+    /// Whether this target can be passed explicitly to Slurm commands.  The
+    /// historical implicit `local` target remains usable for old local-only
+    /// configurations; remote targets always bind explicitly.
     pub fn binds_controller(&self) -> bool {
         self.controller.is_some()
     }
@@ -74,11 +79,17 @@ pub struct SbatchBankConfig {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FileConfig {
+    #[serde(alias = "local_user")]
     local_user: Option<String>,
+    #[serde(alias = "remote_user")]
     remote_user: Option<String>,
+    #[serde(alias = "ssh_host")]
     ssh_host: Option<String>,
+    #[serde(alias = "state_path")]
     state_path: Option<PathBuf>,
+    #[serde(alias = "sbatch_bank")]
     sbatch_bank: Option<PathBuf>,
+    #[serde(alias = "sbatch_banks")]
     sbatch_banks: Option<Vec<SbatchBankConfig>>,
     clusters: Option<Vec<ClusterConfig>>,
 }

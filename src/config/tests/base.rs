@@ -104,34 +104,6 @@ fn fresh_configuration_has_one_neutral_local_cluster() {
 }
 
 #[test]
-fn only_explicit_controllers_are_bound_to_scheduler_commands() {
-    let local = config();
-    assert_eq!(local.clusters[0].name, "sprint");
-    assert!(!local.clusters[0].binds_controller());
-
-    let mut explicit = local.clusters[0].clone();
-    explicit.controller = Some("federated-sprint".into());
-    assert!(explicit.binds_controller());
-
-    let remote = ClusterConfig {
-        name: "cispa".into(),
-        controller: None,
-        transport: "ssh".into(),
-        user: "alice".into(),
-        ssh_host: "cispa".into(),
-        working_directory: PathBuf::from("/tmp"),
-        accounting: true,
-    };
-    assert!(!remote.binds_controller());
-    assert_eq!(remote.controller(), "cispa");
-
-    let mut bound_remote = remote.clone();
-    bound_remote.controller = Some("real-cispa".into());
-    assert!(bound_remote.binds_controller());
-    assert_eq!(bound_remote.controller(), "real-cispa");
-}
-
-#[test]
 fn accepts_new_and_legacy_bank_shapes() {
     let modern: FileConfig =
         serde_json::from_str(r#"{"sbatchBanks":[{"path":"/a","name":"A"},{"path":"/b"}]}"#)
@@ -175,4 +147,43 @@ fn configurable_clusters_are_unique_and_safely_named() {
     value = config();
     value.clusters[0].transport = "command".into();
     assert!(value.validate().is_err());
+}
+
+#[test]
+fn cluster_controller_binding_is_opt_in_for_both_local_and_remote() {
+    let local_unbound = ClusterConfig {
+        name: "sprint".into(),
+        controller: None,
+        transport: "local".into(),
+        user: "alice".into(),
+        ssh_host: String::new(),
+        working_directory: PathBuf::from("/tmp"),
+        accounting: false,
+    };
+    assert!(!local_unbound.binds_controller());
+    assert_eq!(local_unbound.controller(), "sprint");
+
+    let remote_unbound = ClusterConfig {
+        name: "remote_cluster".into(),
+        controller: None,
+        transport: "ssh".into(),
+        user: "remote_user".into(),
+        ssh_host: "remote_host".into(),
+        working_directory: PathBuf::from("/home/remote_user"),
+        accounting: true,
+    };
+    assert!(!remote_unbound.binds_controller());
+    assert_eq!(remote_unbound.controller(), "remote_cluster");
+
+    let bound_cluster = ClusterConfig {
+        name: "cluster_display".into(),
+        controller: Some("slurm_controller_name".into()),
+        transport: "ssh".into(),
+        user: "remote_user".into(),
+        ssh_host: "remote_host".into(),
+        working_directory: PathBuf::from("/home/remote_user"),
+        accounting: true,
+    };
+    assert!(bound_cluster.binds_controller());
+    assert_eq!(bound_cluster.controller(), "slurm_controller_name");
 }

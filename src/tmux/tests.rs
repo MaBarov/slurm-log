@@ -224,3 +224,60 @@ fn empty_workspace_split_arguments_and_startup_errors_are_deterministic() {
             .contains("too small")
     );
 }
+
+#[test]
+fn watcher_command_constructs_proper_follower_invocation() {
+    let config = Config {
+        local_user: "offline".into(),
+        remote_user: "offline".into(),
+        ssh_host: String::new(),
+        state_path: "/tmp/slurm-log-tmux-test.json".into(),
+        executable: "slurm-log".into(),
+        sbatch_banks: Vec::new(),
+        clusters: Vec::new(),
+    };
+    let j = job("99", "RUNNING");
+    let cmd = watcher(&config, &j, 100, true);
+    assert_eq!(cmd[0], "slurm-log");
+    assert!(cmd.iter().any(|arg| arg == "--pane-follow"));
+    assert!(cmd.iter().any(|arg| arg == "cispa"));
+    assert!(cmd.iter().any(|arg| arg == "99"));
+    assert!(cmd.iter().any(|arg| arg == "100"));
+    assert!(cmd.iter().any(|arg| arg == "--show-log-warnings"));
+
+    let quiet_cmd = watcher(&config, &j, 50, false);
+    assert!(!quiet_cmd.iter().any(|arg| arg == "--show-log-warnings"));
+    assert!(quiet_cmd.iter().any(|arg| arg == "50"));
+}
+
+#[test]
+fn obsolete_panes_handles_partial_and_empty_transitions() {
+    let current = vec![
+        Pane {
+            id: "%1".into(),
+            cluster: "cispa".into(),
+            job_id: "10".into(),
+        },
+        Pane {
+            id: "%2".into(),
+            cluster: "sprint".into(),
+            job_id: "20".into(),
+        },
+    ];
+
+    // When desired set matches all current, nothing to remove
+    let all_kept = HashSet::from([
+        ("cispa".into(), "10".into()),
+        ("sprint".into(), "20".into()),
+    ]);
+    let (remove, anchor) = obsolete_panes(&current, &all_kept);
+    assert!(remove.is_empty());
+    assert!(anchor.is_none());
+
+    // When one cluster job is dropped, only that pane is removed
+    let partial = HashSet::from([("cispa".into(), "10".into())]);
+    let (remove, anchor) = obsolete_panes(&current, &partial);
+    assert_eq!(remove.len(), 1);
+    assert_eq!(remove[0].id, "%2");
+    assert!(anchor.is_none());
+}

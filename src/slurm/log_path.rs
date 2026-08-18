@@ -89,7 +89,7 @@ pub(crate) fn validate_control_identity(
     let returned_id = token(value, "JobId=")
         .or_else(|| token(value, "JobID="))
         .context("scontrol response omitted JobId")?;
-    if !job_id_matches(returned_id, id) {
+    if !control_job_id_matches(value, returned_id, id) {
         bail!("scontrol response job ID does not match {cluster}:{id}");
     }
     let owner = token(value, "UserId=")
@@ -106,6 +106,24 @@ pub(crate) fn validate_control_identity(
         bail!("scontrol response cluster does not match configured cluster");
     }
     Ok(())
+}
+
+fn control_job_id_matches(value: &str, returned_id: &str, wanted: &str) -> bool {
+    if job_id_matches(returned_id, wanted) {
+        return true;
+    }
+    if let Some((wanted_master, wanted_task)) = wanted.split_once('_') {
+        let master_matches = token(value, "ArrayJobId=")
+            .map(|array_master| array_master == wanted_master)
+            .unwrap_or_else(|| job_id_matches(returned_id, wanted_master));
+        if master_matches
+            && let Some(array_task) = token(value, "ArrayTaskId=")
+            && array_task == wanted_task
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn job_id_matches(returned: &str, wanted: &str) -> bool {
@@ -175,11 +193,6 @@ fn apply_control_details(details: &mut Job, value: &str) {
     details.exit_code = token(value, "ExitCode=").unwrap_or("").into();
     details.partition = token(value, "Partition=").unwrap_or("").into();
     details.reason = token(value, "Reason=").unwrap_or(&details.reason).into();
-}
-
-fn token<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    text.split_whitespace()
-        .find_map(|part| part.strip_prefix(prefix))
 }
 
 fn expand_path(template: &str, name: &str, raw: &str, master: &str, task: &str) -> String {

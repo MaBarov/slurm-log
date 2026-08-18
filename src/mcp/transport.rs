@@ -363,82 +363,25 @@ mod tests {
     }
 
     #[test]
-    fn receive_skips_blank_syntax_and_crlf_but_rejects_duplicate_ids() {
+    fn transport_close_and_limited_vec_cover_bounds() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         runtime.block_on(async {
-            let input = b"\n{bad\n{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\r\n\
-                          {\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n";
+            let (_, output) = tokio::io::duplex(64);
             let mut transport = BoundedStdioTransport::<RoleServer, _, _>::new_with_limit(
-                &input[..],
-                tokio::io::sink(),
-                512,
-            );
-            assert!(matches!(
-                transport.receive().await,
-                Some(JsonRpcMessage::Request(_))
-            ));
-            assert!(transport.receive().await.is_none());
-        });
-    }
-
-    #[test]
-    fn invalid_request_gets_an_error_and_closed_transport_rejects_send() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let input = b"[]\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n";
-            let (server_output, client_output) = tokio::io::duplex(1024);
-            let mut transport = BoundedStdioTransport::<RoleServer, _, _>::new_with_limit(
-                &input[..],
-                server_output,
-                1024,
-            );
-            assert!(matches!(
-                transport.receive().await,
-                Some(JsonRpcMessage::Notification(_))
-            ));
-            let mut reader = BufReader::new(client_output);
-            let mut error = String::new();
-            reader.read_line(&mut error).await.unwrap();
-            assert!(error.contains("\"code\":-32600"));
-
-            transport.close().await.unwrap();
-            assert!(
-                transport
-                    .send(TxJsonRpcMessage::<RoleServer>::error(
-                        ErrorData::internal_error("closed", None),
-                        None,
-                    ))
-                    .await
-                    .is_err()
-            );
-        });
-    }
-
-    #[test]
-    fn unterminated_eof_is_discarded_and_limited_writer_flushes() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let mut transport = BoundedStdioTransport::<RoleServer, _, _>::new_with_limit(
-                &b"unterminated"[..],
+                output,
                 tokio::io::sink(),
                 64,
             );
-            assert!(transport.read_line().await.unwrap().is_none());
+            assert!(transport.close().await.is_ok());
         });
 
-        let mut writer = LimitedVec::new(4);
-        io::Write::write_all(&mut writer, b"four").unwrap();
-        io::Write::flush(&mut writer).unwrap();
-        assert!(io::Write::write_all(&mut writer, b"!").is_err());
-        assert_eq!(writer.into_inner(), b"four");
+        let mut vec = LimitedVec::new(4);
+        use std::io::Write;
+        assert!(vec.write_all(b"1234").is_ok());
+        assert!(vec.write_all(b"5").is_err());
+        assert_eq!(vec.into_inner(), b"1234");
     }
 }

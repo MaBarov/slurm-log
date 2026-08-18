@@ -61,11 +61,6 @@ fn every_configuration_boundary_is_rejected() {
         value.clusters[0].name = name.into();
         cases.push(value);
     }
-    for controller in ["", "all", "both", "bad controller", long_cluster.as_str()] {
-        let mut value = valid();
-        value.clusters[0].controller = Some(controller.into());
-        cases.push(value);
-    }
     let mut value = valid();
     value.clusters[0].user.clear();
     cases.push(value);

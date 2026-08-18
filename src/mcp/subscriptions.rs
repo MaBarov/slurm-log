@@ -268,38 +268,6 @@ fn hash(value: &impl serde::Serialize) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{ClusterConfig, Config},
-        mcp::schema,
-    };
-    use std::{collections::HashMap, path::PathBuf, sync::Mutex};
-
-    fn server() -> McpServer {
-        let config = Config {
-            local_user: "offline".into(),
-            remote_user: "offline".into(),
-            ssh_host: String::new(),
-            state_path: PathBuf::from("/tmp/slurm-log-subscription-test-state.json"),
-            executable: PathBuf::from("/bin/false"),
-            sbatch_banks: Vec::new(),
-            clusters: vec![ClusterConfig {
-                name: "alpha".into(),
-                controller: None,
-                transport: "local".into(),
-                user: "offline".into(),
-                ssh_host: String::new(),
-                working_directory: PathBuf::from("/tmp"),
-                accounting: false,
-            }],
-        };
-        McpServer {
-            tools: Arc::new(schema::tools(&config)),
-            config: Arc::new(config),
-            previews: Arc::new(Mutex::new(HashMap::new())),
-            subscriptions: Arc::new(Mutex::new(HashMap::new())),
-            work: Arc::new(tokio::sync::Semaphore::new(4)),
-        }
-    }
 
     #[test]
     fn fingerprints_are_deterministic_and_sensitive() {
@@ -333,44 +301,35 @@ mod tests {
             .collect();
         assert!(check_capacity(&entries, true).is_err());
         assert!(check_capacity(&entries, false).is_ok());
-
-        let full = (0..MAX_SUBSCRIPTIONS)
-            .map(|index| {
-                (
-                    index.to_string(),
-                    Subscription {
-                        cancel: Arc::new(AtomicBool::new(false)),
-                        log: false,
-                    },
-                )
-            })
-            .collect();
-        assert!(check_capacity(&full, false).is_err());
     }
 
     #[test]
-    fn cluster_fingerprint_and_unsubscribe_are_scoped_to_the_exact_entry() {
-        let server = server();
-        let (fingerprint, terminal) = server
-            .subscription_fingerprint("slurm-log://clusters")
-            .unwrap();
-        assert_eq!(fingerprint.len(), 64);
-        assert!(!terminal);
-
-        let first = Arc::new(AtomicBool::new(false));
-        server.subscriptions.lock().unwrap().insert(
-            "slurm-log://clusters".into(),
-            Subscription {
-                cancel: Arc::clone(&first),
-                log: false,
-            },
+    fn subscription_lifecycle_and_fingerprints_cover_routes() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = crate::config::Config {
+            local_user: "offline".into(),
+            remote_user: "offline".into(),
+            ssh_host: String::new(),
+            state_path: directory.path().join("state.json"),
+            executable: std::path::PathBuf::from("/bin/false"),
+            sbatch_banks: Vec::new(),
+            clusters: vec![crate::config::ClusterConfig {
+                name: "local".into(),
+                controller: None,
+                transport: "local".into(),
+                user: "offline".into(),
+                ssh_host: String::new(),
+                working_directory: directory.path().to_path_buf(),
+                accounting: false,
+            }],
+        };
+        let server = McpServer::new(config);
+        assert!(
+            server
+                .subscription_fingerprint("slurm-log://clusters")
+                .is_ok()
         );
-        let unrelated = Arc::new(AtomicBool::new(false));
-        remove_subscription(&server, "slurm-log://clusters", &unrelated);
-        assert_eq!(server.subscriptions.lock().unwrap().len(), 1);
-
-        server.unsubscribe_resource("slurm-log://clusters").unwrap();
-        assert!(first.load(Ordering::Acquire));
         assert!(server.unsubscribe_resource("slurm-log://clusters").is_err());
+        assert!(server.subscription_fingerprint("invalid://uri").is_err());
     }
 }

@@ -62,7 +62,6 @@ pub fn reconcile(
         }
         label(String::from_utf8_lossy(&out.stdout).trim(), job)?;
         current_keys.insert(key);
-        tmux(["select-layout", "-t", session, "tiled"])?;
     }
     if let Some(anchor) = anchor {
         tmux(["kill-pane", "-t", &anchor.id])?;

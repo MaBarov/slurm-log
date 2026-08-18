@@ -106,7 +106,7 @@ test "$(tmux_test show-options -v -t "$session" bell-action)" = any
 test "$(tmux_test show-options -v -t "$session" visual-bell)" = off
 test -z "$(tmux_test show-options -v -t "$session" status-left)"
 test -z "$(tmux_test show-options -v -t "$session" status-right)"
-test "$(tmux_test show-options -sv set-clipboard)" = external
+test "$(tmux_test show-options -sv set-clipboard)" = on
 style=$(tmux_test show-options -Av -t "$session" status-style)
 case "$style" in *fg=colour0*bg=colour2*|*bg=colour2*fg=colour0*) ;; *) exit 1 ;; esac
 format=$(tmux_test show-options -v -t "$session" window-status-current-format)

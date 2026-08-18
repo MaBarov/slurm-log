@@ -1,24 +1,46 @@
 fn parse_accounting(input: &str, cluster: &str, wanted: &str) -> Option<JobDetails> {
-    let rows: Vec<Vec<&str>> = input
-        .lines()
-        .map(|line| line.split('|').collect())
-        .filter(|fields: &Vec<_>| fields.len() >= 26)
-        .collect();
-    let main = rows.iter().find(|fields| {
-        fields[0].split('.').next().unwrap_or(fields[0]) == wanted && !fields[0].contains('.')
-    })?;
-    let max_rss = rows
-        .iter()
-        .filter(|row| row[0].split('.').next().unwrap_or(row[0]) == wanted)
-        .filter_map(|row| parse_bytes(row.get(18).copied().unwrap_or("")))
-        .max()
-        .unwrap_or(0);
-    let total_cpu = rows
-        .iter()
-        .filter(|row| row[0].split('.').next().unwrap_or(row[0]) == wanted)
-        .filter_map(|row| parse_duration(row.get(22).copied().unwrap_or("")))
-        .max()
-        .unwrap_or(0);
+    let mut main_fields: Option<Vec<&str>> = None;
+    let mut max_rss = 0_u64;
+    let mut total_cpu = 0_u64;
+    let mut gpu_utilization: Option<f64> = None;
+    let mut gpu_memory_bytes: Option<u64> = None;
+
+    for line in input.lines() {
+        let fields: Vec<&str> = line.split('|').collect();
+        if fields.len() < 26 {
+            continue;
+        }
+        let id_field = fields[0];
+        let base_id = id_field.split('.').next().unwrap_or(id_field);
+        if base_id != wanted {
+            continue;
+        }
+        if !id_field.contains('.') && main_fields.is_none() {
+            main_fields = Some(fields.clone());
+        }
+        if let Some(rss) = fields.get(18).copied().and_then(parse_bytes) {
+            max_rss = max_rss.max(rss);
+        }
+        if let Some(cpu) = fields.get(22).copied().and_then(parse_duration) {
+            total_cpu = total_cpu.max(cpu);
+        }
+        if let Some(val) = fields
+            .get(26)
+            .and_then(|v| tres_value(v, "gres/gpuutil"))
+            .and_then(|v| v.trim_end_matches('%').parse::<f64>().ok())
+        {
+            gpu_utilization = Some(gpu_utilization.map_or(val, |prev| prev.max(val)));
+        }
+        if let Some(mem) = fields
+            .get(27)
+            .and_then(|v| tres_value(v, "gres/gpumem"))
+            .and_then(parse_bytes)
+        {
+            gpu_memory_bytes = Some(gpu_memory_bytes.map_or(mem, |prev| prev.max(mem)));
+        }
+    }
+
+    let main = main_fields?;
     let alloc_tres = main.get(20).copied().unwrap_or("");
     let req_tres = main.get(21).copied().unwrap_or("");
     let cpus = number(main.get(15).copied().unwrap_or(""))
@@ -35,18 +57,6 @@ fn parse_accounting(input: &str, cluster: &str, wanted: &str) -> Option<JobDetai
     if gpus == 0 {
         (gpus, gpu_types) = parse_gpus(req_tres);
     }
-    let gpu_utilization = rows
-        .iter()
-        .filter_map(|row| row.get(26))
-        .filter_map(|value| tres_value(value, "gres/gpuutil"))
-        .filter_map(|value| value.trim_end_matches('%').parse::<f64>().ok())
-        .reduce(f64::max);
-    let gpu_memory_bytes = rows
-        .iter()
-        .filter_map(|row| row.get(27))
-        .filter_map(|value| tres_value(value, "gres/gpumem"))
-        .filter_map(parse_bytes)
-        .max();
     let cpu_efficiency = (total_cpu > 0 || !state_running(main.get(2).copied().unwrap_or("")))
         .then(|| cpu_efficiency(total_cpu, elapsed_seconds, cpus))
         .flatten();

@@ -6,7 +6,6 @@
 # another user's state, credentials, daemon socket, or job history.
 #
 # Quick setup:
-#   curl -fsSL https://github.com/MaBarov/slurm-log/releases/latest/download/install.sh | bash
 #   ./install.sh
 #
 # Useful options:
@@ -42,17 +41,18 @@ allow_downgrade=0
 force_config=0
 path_update=1
 run_setup=1
-release_tmp= key_tmp=
+release_tmp=
 
-cleanup() { [ -z "$release_tmp" ] || rm -rf "$release_tmp"; [ -z "$key_tmp" ] || rm -rf "$key_tmp"; }
+cleanup() {
+    [ -z "$release_tmp" ] || rm -rf "$release_tmp"
+}
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 usage() {
-    if [ ! -f "$0" ]; then printf 'See install.sh --help for options.\n' >&2; return 0; fi
-    awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -92,10 +92,6 @@ case "$release_version" in
 esac
 
 [ -n "$remote_user" ] || remote_user=$local_user
-
-# Piped installs keep reading the script from stdin; interactive reads use /dev/tty.
-have_tty=0
-if [ -t 0 ] || stty >/dev/null 2>&1 </dev/tty; then have_tty=1; fi
 
 validate_identity() {
     case "$1" in
@@ -175,7 +171,10 @@ download_file() {
 valid_version() {
     version_value=$1
     case "$version_value" in ''|*[!0-9.]*) return 1 ;; esac
-    set -- $(printf '%s' "$version_value" | tr '.' ' ')
+    old_ifs=$IFS
+    IFS=.
+    set -- $version_value
+    IFS=$old_ifs
     [ "$#" -eq 3 ] || return 1
     for part in "$@"; do
         case "$part" in
@@ -202,6 +201,12 @@ verify_manifest() {
     signature=$2
     expected_asset=$3
     expected_target=$4
+    [ -n "$release_public_key_file" ] && [ -f "$release_public_key_file" ] && [ ! -L "$release_public_key_file" ] && \
+        [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -gt 0 ] && \
+        [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -le "$max_manifest_bytes" ] || {
+        printf 'A trusted --release-public-key PEM is required for a prebuilt download.\n' >&2
+        return 2
+    }
     command -v openssl >/dev/null 2>&1 || {
         printf 'openssl is required to verify the signed release manifest.\n' >&2
         return 2
@@ -253,38 +258,6 @@ verify_archive() {
     fi
 }
 
-# Reviewed Ed25519 release trust anchor (public half only), the same key as
-# the checked-in release-public-key.pem.  Keep the two in sync.
-embedded_public_key() {
-    printf '%s\n' '-----BEGIN PUBLIC KEY-----' \
-        'MCowBQYDK2VwAyEAqxatNVqvScH8/34ybU7jwFq7+UUvx5+8I9H3QH6pBaA=' \
-        '-----END PUBLIC KEY-----'
-}
-
-# An explicit --release-public-key PEM wins; otherwise use the embedded
-# reviewed key in a private temp file.  A bootstrapped checkout whose embedded
-# anchor is still UNCONFIGURED keeps requiring the explicit PEM.
-ensure_release_key() {
-    if [ -n "$release_public_key_file" ]; then
-        [ -f "$release_public_key_file" ] && [ ! -L "$release_public_key_file" ] && \
-            [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -gt 0 ] && \
-            [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -le "$max_manifest_bytes" ] && return 0
-        printf 'The --release-public-key PEM is missing or invalid.\n' >&2
-        return 2
-    fi
-    embedded=$(embedded_public_key)
-    case "$embedded" in
-        ''|*UNCONFIGURED*)
-            printf 'A trusted --release-public-key PEM is required for a prebuilt download.\n' >&2
-            return 2
-            ;;
-    esac
-    key_tmp=$(mktemp -d) || return 1
-    umask 077
-    printf '%s\n' "$embedded" > "$key_tmp/release-public-key.pem" || return 1
-    release_public_key_file=$key_tmp/release-public-key.pem
-}
-
 download_release() {
     case "$(uname -m)" in
         x86_64|amd64) architecture=x86_64 ;;
@@ -297,7 +270,6 @@ download_release() {
         printf 'sha256sum, tar, and timeout are required to install a prebuilt release.\n' >&2
         return 1
     fi
-    ensure_release_key || return $?
 
     release_root=${SLURM_LOG_RELEASE_ROOT:-https://github.com/MaBarov/slurm-log/releases}
     case "$release_root" in
@@ -411,10 +383,9 @@ else
 fi
 
 if [ "$run_setup" -eq 1 ]; then
-    if [ "$have_tty" -eq 1 ]; then
+    if [ -t 0 ]; then
         printf '\nStarting the setup wizard...\n\n'
-        if [ -t 0 ]; then "$prefix/bin/slurm-log" setup; else "$prefix/bin/slurm-log" setup </dev/tty; fi \
-            || printf '\nSetup did not finish; run %s/bin/slurm-log setup to retry.\n' "$prefix"
+        "$prefix/bin/slurm-log" setup
     else
         printf '\nSetup needs a terminal and was skipped. Run: %s/bin/slurm-log setup\n' "$prefix"
     fi
@@ -424,11 +395,9 @@ case ":${PATH}:" in
     *":$prefix/bin:"*) ;;
     *)
         printf '\n%s/bin is not currently on PATH.\n' "$prefix"
-        if [ "$path_update" -eq 1 ] && [ "$have_tty" -eq 1 ]; then
+        if [ "$path_update" -eq 1 ] && [ -t 0 ]; then
             printf 'Add it to ~/.bashrc now? [Y/n] '
-            # Ctrl-D keeps the [Y/n] default instead of aborting the script.
-            answer=
-            { [ -t 0 ] && read answer || read answer </dev/tty; } || true
+            read answer
             case "$answer" in
                 n|N|no|NO) ;;
                 *)

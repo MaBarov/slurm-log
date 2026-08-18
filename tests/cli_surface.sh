@@ -86,7 +86,7 @@ case "$*" in
     *'squeue -h'*)
         printf '201|RUNNING|beta-run|00:02|beta-node|gpu|2026-08-12T10:00:00|2000|remote.sbatch|offline-beta\n'
         ;;
-    *'sacct '*'-X -S'*)
+    *'sacct '*' -X -S'*)
         printf '401|COMPLETED|beta-complete|00:05|%s|0:0|3G|cpu=4,gres/gpu=1|gpu|offline-beta|beta\n' "$CLI_NOW"
         ;;
     *) exit 23 ;;
@@ -126,7 +126,7 @@ chmod 755 "$fake_bin"/*
 cat >"$config" <<EOF
 {
   "clusters": [
-    {"name":"alpha","transport":"local","user":"offline-alpha","workingDirectory":"$test_root","accounting":true},
+    {"name":"alpha","controller":"alpha","transport":"local","user":"offline-alpha","workingDirectory":"$test_root","accounting":true},
     {"name":"beta","transport":"ssh","user":"offline-beta","sshHost":"beta.invalid","workingDirectory":"/offline","accounting":true}
   ],
   "sbatchBanks": [
@@ -204,8 +204,7 @@ grep -F alpha-shell "$test_root/blocked" >/dev/null
 "$binary" archive --cluster all >"$test_root/archive"
 grep -F alpha-complete "$test_root/archive" >/dev/null
 grep -F beta-complete "$test_root/archive" >/dev/null
-grep -F 'sacct -X -S' "$calls" | grep -F -- '-u offline-alpha' >/dev/null
-! grep -F -- 'sacct --clusters alpha' "$calls" >/dev/null
+grep -F 'sacct --clusters alpha -X -S' "$calls" | grep -F -- '-u offline-alpha' >/dev/null
 
 # JSON, state read/unread, and explicit active-monitor suppression.
 "$binary" json --cluster all >"$test_root/jobs.json"
@@ -236,8 +235,7 @@ grep -F 'eval.sbatch' "$test_root/environment-bank" >/dev/null
 "$binary" submit Fixtures/train.sbatch --cluster alpha | grep -F 'alpha:777' >/dev/null
 cmp "$test_root/bank/train.sbatch" "$test_root/submitted-input"
 "$binary" cancel 101 103 --cluster alpha | grep -F '2 job(s)' >/dev/null
-grep -F 'scancel 101 103' "$calls" >/dev/null
-! grep -F 'scancel --clusters alpha' "$calls" >/dev/null
+grep -F 'scancel --clusters alpha 101 103' "$calls" >/dev/null
 CLI_SCANCEL_FAIL=1 expect_fail cancel 101 --cluster alpha
 expect_fail submit missing.sbatch --cluster alpha
 
@@ -252,8 +250,7 @@ grep -F 'tmux new-session' "$calls" >/dev/null
 grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--pane-follow --lines 7' | grep -F -- '--show-log-warnings alpha 101' >/dev/null
 : >"$calls"
 "$binary" 101 --lines 9
-grep -F 'scontrol show job -o 101' "$calls" >/dev/null
-! grep -F 'scontrol --cluster alpha' "$calls" >/dev/null
+grep -F 'scontrol --cluster alpha show job -o 101' "$calls" >/dev/null
 grep -F 'tmux respawn-pane -k -t %77' "$calls" | grep -F -- '--lines 9' >/dev/null
 expect_fail 99999999
 : >"$calls"

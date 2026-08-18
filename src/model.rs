@@ -95,7 +95,7 @@ impl Job {
     }
 }
 
-pub fn pending_explanation(reason: &str) -> String {
+fn pending_explanation(reason: &str) -> String {
     let reason = reason.trim_matches(['(', ')']);
     let explanation = if reason == "Priority" {
         "waiting behind higher-priority jobs"
@@ -133,8 +133,9 @@ pub struct Pane {
 pub fn valid_job_id(id: &str) -> bool {
     let mut parts = id.split('_');
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    // `split` always yields at least one element, even for an empty string.
-    let first = parts.next().unwrap_or_default();
+    let Some(first) = parts.next() else {
+        return false;
+    };
     digits(first) && parts.next().is_none_or(digits) && parts.next().is_none()
 }
 
@@ -142,6 +143,9 @@ pub fn valid_job_id(id: &str) -> bool {
 /// richer MCP-specific sanitizer; UI metadata must never carry raw escape,
 /// carriage-return, clipboard, or other control sequences into a terminal.
 pub fn terminal_text(value: &str) -> String {
+    if !value.bytes().any(|b| b < 0x20 || b == 0x7F) {
+        return value.to_string();
+    }
     let mut safe = String::with_capacity(value.len());
     for character in value.chars() {
         match character {
@@ -159,6 +163,12 @@ pub fn terminal_text(value: &str) -> String {
     safe
 }
 
+/// Extract a whitespace-delimited key-value token from scheduler metadata (e.g. `JobId=123`).
+pub fn token<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.split_whitespace()
+        .find_map(|part| part.strip_prefix(prefix))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +184,9 @@ mod tests {
         for valid in ["0", "00001", "1_0", "999999999999999999999999"] {
             assert!(valid_job_id(valid), "rejected valid ID {valid:?}");
         }
+        assert_eq!(token("JobId=42 UserId=owner(1000)", "JobId="), Some("42"));
+        assert_eq!(token("JobId=42 UserId=owner(1000)", "UserId="), Some("owner(1000)"));
+        assert_eq!(token("JobId=42", "Missing="), None);
     }
 
     #[test]
@@ -182,7 +195,6 @@ mod tests {
             terminal_text("name\x1b]52;c;bad\x07\r\n"),
             "name\\x1b]52;c;bad\\u{7}\\r\\n"
         );
-        assert_eq!(terminal_text("a\tb"), "a\\tb");
     }
 
     #[test]

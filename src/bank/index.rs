@@ -1,6 +1,5 @@
 struct IndexedDirectory {
     key: Expanded,
-    path: PathBuf,
     ancestors: Vec<Expanded>,
     depth: usize,
     files: Vec<usize>,
@@ -101,9 +100,12 @@ impl BankIndex {
                     continue;
                 }
                 let open = expanded.contains(&directory.key);
+                let Expanded::Directory(_, path) = &directory.key else {
+                    unreachable!();
+                };
                 rows.push(BankRow::Directory(
                     bank_index,
-                    directory.path.clone(),
+                    path.clone(),
                     directory.depth,
                     open,
                 ));
@@ -162,8 +164,7 @@ fn index_bank(bank: usize, range: &LoadedBank, scripts: &[Script], cluster: &str
                 .collect();
             let depth = path.components().count() + 1;
             IndexedDirectory {
-                key: Expanded::Directory(bank, path.clone()),
-                path,
+                key: Expanded::Directory(bank, path),
                 ancestors,
                 depth,
                 files,

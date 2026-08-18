@@ -1,6 +1,8 @@
 fn run(config: &Config) -> Result<()> {
     let (socket, lock_path) = paths(config);
-    fs::create_dir_all(socket.parent().unwrap_or(Path::new("")))?;
+    if let Some(parent) = socket.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -8,7 +10,7 @@ fn run(config: &Config) -> Result<()> {
         .write(true)
         .mode(0o600)
         .open(lock_path)?;
-    if lock.try_lock_exclusive().is_err() {
+    if rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err() {
         return Ok(());
     }
     let _ = fs::remove_file(&socket);
@@ -29,14 +31,48 @@ fn run(config: &Config) -> Result<()> {
     let log_cache: LogCache = Arc::new(Mutex::new(HashMap::new()));
     start_refresh_loop(config.clone(), Arc::clone(&cache));
     while let Ok(mut stream) = receiver.recv_timeout(IDLE_TIMEOUT) {
+        if let Err(error) = validate_peer_credentials(&stream) {
+            let _ = write_reply(
+                &mut stream,
+                &Reply {
+                    error: Some(format!("unauthorized daemon connection: {error:#}")),
+                    ..empty_reply()
+                },
+            );
+            continue;
+        }
         let _ = stream.set_read_timeout(Some(CLIENT_TIMEOUT));
         let _ = stream.set_write_timeout(Some(CLIENT_TIMEOUT));
-        match handle_stream_with_logs(config, &cache, &detail_cache, &log_cache, &mut stream) {
-            Ok(true) => break,
-            Ok(false) => {}
+        let request: Request = match read_frame(&mut stream) {
+            Ok(req) => req,
             Err(error) => {
-                // A malformed or disconnected client must not terminate the
-                // daemon. Return a bounded error when possible, then continue.
+                let _ = write_reply(
+                    &mut stream,
+                    &Reply {
+                        error: Some(format!("invalid daemon request: {error:#}")),
+                        ..empty_reply()
+                    },
+                );
+                continue;
+            }
+        };
+        if matches!(request, Request::Stop) {
+            let _ = write_reply(&mut stream, &empty_reply());
+            break;
+        }
+        let config = config.clone();
+        let cache = Arc::clone(&cache);
+        let detail_cache = Arc::clone(&detail_cache);
+        let log_cache = Arc::clone(&log_cache);
+        thread::spawn(move || {
+            if let Err(error) = dispatch_request(
+                &config,
+                &cache,
+                &detail_cache,
+                &log_cache,
+                &mut stream,
+                request,
+            ) {
                 let _ = write_reply(
                     &mut stream,
                     &Reply {
@@ -45,11 +81,13 @@ fn run(config: &Config) -> Result<()> {
                     },
                 );
             }
-        }
+        });
     }
     let _ = fs::remove_file(socket);
     Ok(())
 }
+
+#[cfg(test)]
 fn handle_stream_with_logs(
     config: &Config,
     cache: &SharedCache,
@@ -58,11 +96,27 @@ fn handle_stream_with_logs(
     stream: &mut UnixStream,
 ) -> Result<bool> {
     let request: Request = read_frame(stream)?;
+    if matches!(request, Request::Stop) {
+        write_reply(stream, &empty_reply())?;
+        return Ok(true);
+    }
+    dispatch_request(config, cache, detail_cache, log_cache, stream, request)?;
+    Ok(false)
+}
+
+fn dispatch_request(
+    config: &Config,
+    cache: &SharedCache,
+    detail_cache: &DetailCache,
+    log_cache: &LogCache,
+    stream: &mut UnixStream,
+    request: Request,
+) -> Result<()> {
     let reply = match request {
         Request::Ping => empty_reply(),
         Request::Stop => {
             write_reply(stream, &empty_reply())?;
-            return Ok(true);
+            return Ok(());
         }
         Request::Details { cluster, id, force } => {
             crate::details::validate_cluster(config, &cluster)?;
@@ -78,12 +132,12 @@ fn handle_stream_with_logs(
                 crate::details::fetch(config, &cluster, &id, previous)
             });
             write_reply(stream, &reply)?;
-            return Ok(false);
+            return Ok(());
         }
         Request::LogMetadata { cluster, id } => {
             let data = resolve_log_request(config, log_cache, &cluster, &id, LogRead::Metadata)?;
             write_frame(stream, &data)?;
-            return Ok(false);
+            return Ok(());
         }
         Request::LogWindow {
             cluster,
@@ -98,7 +152,7 @@ fn handle_stream_with_logs(
                 LogRead::Window(max_bytes),
             )?;
             write_frame(stream, &data)?;
-            return Ok(false);
+            return Ok(());
         }
         Request::LogRead {
             cluster,
@@ -114,7 +168,7 @@ fn handle_stream_with_logs(
                 LogRead::Range(start, max_bytes),
             )?;
             write_frame(stream, &data)?;
-            return Ok(false);
+            return Ok(());
         }
         Request::Query {
             cluster,
@@ -137,7 +191,7 @@ fn handle_stream_with_logs(
                 };
                 if let Some(snapshot) = throttled {
                     write_filtered_reply(config, stream, &snapshot, &cluster, &filter)?;
-                    return Ok(false);
+                    return Ok(());
                 }
             }
             if !force {
@@ -153,7 +207,7 @@ fn handle_stream_with_logs(
                     // The refresh loop updates it in the background, so opening
                     // another picker never waits for SSH or scheduler RPCs.
                     write_filtered_reply(config, stream, &snapshot, &cluster, &filter)?;
-                    return Ok(false);
+                    return Ok(());
                 }
             }
             if force {
@@ -190,11 +244,18 @@ fn handle_stream_with_logs(
                 },
             );
             invalidate_older_combined(&mut entries, &cluster, archive, now);
-            return Ok(false);
+            return Ok(());
         }
     };
     write_reply(stream, &reply)?;
-    Ok(false)
+    Ok(())
+}
+fn validate_peer_credentials(stream: &UnixStream) -> Result<()> {
+    let peer = rustix::net::sockopt::get_socket_peercred(stream)?;
+    if peer.uid != rustix::process::getuid() {
+        bail!("unauthorized peer UID: {:?}", peer.uid);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

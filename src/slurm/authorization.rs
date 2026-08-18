@@ -1,22 +1,79 @@
+/// Typed lookup failure so MCP can report a machine-readable `error_type`
+/// instead of a raw scheduler stderr cascade.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExactJobError {
+    /// The scheduler RPC itself failed (unreachable host, broken SSH, etc.).
+    Scheduler(String),
+    /// The job is not an active job owned by the configured user and the
+    /// target has no accounting to consult.
+    NotFound,
+    /// The accounting record does not exist or is not owned by the
+    /// configured user.
+    NotOwned,
+    /// The requested identity is syntactically invalid.
+    Invalid,
+}
+
+impl ExactJobError {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ExactJobError::Scheduler(_) => "scheduler_unreachable",
+            ExactJobError::NotFound => "job_not_found",
+            ExactJobError::NotOwned => "job_not_owned",
+            ExactJobError::Invalid => "invalid_request",
+        }
+    }
+}
+
+impl std::fmt::Display for ExactJobError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExactJobError::Scheduler(error) => write!(formatter, "{error}"),
+            ExactJobError::NotFound => formatter.write_str(
+                "job is not an active job owned by the configured user and accounting is disabled",
+            ),
+            ExactJobError::NotOwned => {
+                formatter.write_str("job is not owned by the configured Slurm user")
+            }
+            ExactJobError::Invalid => formatter.write_str("invalid job ID"),
+        }
+    }
+}
+
+impl std::error::Error for ExactJobError {}
+
 /// Fail closed unless the exact job belongs to the configured Slurm owner.
 pub fn authorize_exact_job(config: &Config, cluster: &str, id: &str) -> Result<Job> {
+    authorize_exact_job_typed(config, cluster, id).map_err(anyhow::Error::new)
+}
+
+/// Typed variant of `authorize_exact_job` for tools that classify failures.
+pub fn authorize_exact_job_typed(
+    config: &Config,
+    cluster: &str,
+    id: &str,
+) -> std::result::Result<Job, ExactJobError> {
     if !valid_job_id(id) {
-        bail!("invalid job ID {id}");
+        return Err(ExactJobError::Invalid);
     }
     // Authorization is never satisfied from the shared queue cache.  This
     // dedicated query returns the scheduler's user column and checks it
     // explicitly, rather than merely trusting a `-u` filter to have been
     // applied by an arbitrary/lagging controller response.
-    if let Some(job) = query_exact_queued(config, cluster, id)? {
-        return Ok(job);
+    match query_exact_queued(config, cluster, id) {
+        Ok(Some(job)) => return Ok(job),
+        Ok(None) => {}
+        Err(error) => return Err(ExactJobError::Scheduler(format!("{error:#}"))),
     }
-    let target = config.cluster(cluster)?;
+    let target = config.cluster(cluster).map_err(|error| ExactJobError::Scheduler(format!("{error:#}")))?;
     if !target.accounting {
-        bail!("job {cluster}:{id} is not an active job owned by the configured user");
+        return Err(ExactJobError::NotFound);
     }
-    query_exact_accounting(config, cluster, id)?.context(format!(
-        "job {cluster}:{id} is not owned by the configured Slurm user"
-    ))
+    match query_exact_accounting(config, cluster, id) {
+        Ok(Some(job)) => Ok(job),
+        Ok(None) => Err(ExactJobError::NotOwned),
+        Err(error) => Err(ExactJobError::Scheduler(format!("{error:#}"))),
+    }
 }
 
 /// Query a job's controller record on the same explicitly bound controller
@@ -45,7 +102,16 @@ fn query_exact_queued(config: &Config, cluster: &str, id: &str) -> Result<Option
     // Keep the user immediately after JobId so this parser cannot silently
     // mistake a changed squeue output layout for an ownership grant.
     args.extend(["-o", "%i|%u|%T|%j|%M|%R|%P|%S|%Q|%o"]);
-    let value = scheduler_text(config, cluster, "squeue", &args)?;
+    let value = match scheduler_text(config, cluster, "squeue", &args) {
+        Ok(value) => value,
+        Err(error) => {
+            let message = format!("{error:#}");
+            if message.contains("Invalid job id") || message.contains("slurm_load_jobs error") {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+    };
     Ok(parse_exact_queued_response(&value, cluster, id, &target.user))
 }
 
@@ -55,10 +121,10 @@ fn parse_exact_queued_response(
     id: &str,
     owner: &str,
 ) -> Option<Job> {
-    value.lines().find_map(|line| {
+    for line in value.lines() {
         let fields: Vec<_> = line.split('|').map(str::trim).collect();
         if fields.len() != 10 || fields[0] != id || fields[1] != owner {
-            return None;
+            continue;
         }
         // Feed the existing bounded renderer parser its canonical nine-field
         // shape after ownership has been validated from the raw response.
@@ -66,9 +132,13 @@ fn parse_exact_queued_response(
             .chain(fields[2..].iter().copied())
             .collect::<Vec<_>>()
             .join("|");
-        let job = parse_queue(&canonical, cluster).into_iter().next()?;
-        (job.id == id).then_some(job)
-    })
+        if let Some(job) = parse_queue(&canonical, cluster).into_iter().next()
+            && job.id == id
+        {
+            return Some(job);
+        }
+    }
+    None
 }
 
 /// Fresh, exact sacct authorization for terminal jobs.  The user and cluster
@@ -99,21 +169,25 @@ fn parse_exact_accounting_response(
     owner: &str,
     expected_cluster: Option<&str>,
 ) -> Option<Job> {
-    value.lines().find_map(|line| {
+    for line in value.lines() {
         let fields: Vec<_> = line.split('|').map(str::trim).collect();
         if fields.len() != 11
             || fields[0] != id
             || fields[1] != owner
             || expected_cluster.is_some_and(|name| fields[10] != name)
         {
-            return None;
+            continue;
         }
         let canonical = [
             fields[0], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7],
             fields[8], fields[9],
         ]
         .join("|");
-        let job = parse_recent(&canonical, cluster).into_iter().next()?;
-        (job.id == id).then_some(job)
-    })
+        if let Some(job) = parse_recent(&canonical, cluster).into_iter().next()
+            && job.id == id
+        {
+            return Some(job);
+        }
+    }
+    None
 }
