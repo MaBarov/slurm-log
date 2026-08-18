@@ -185,7 +185,10 @@ mod tests {
             assert!(valid_job_id(valid), "rejected valid ID {valid:?}");
         }
         assert_eq!(token("JobId=42 UserId=owner(1000)", "JobId="), Some("42"));
-        assert_eq!(token("JobId=42 UserId=owner(1000)", "UserId="), Some("owner(1000)"));
+        assert_eq!(
+            token("JobId=42 UserId=owner(1000)", "UserId="),
+            Some("owner(1000)")
+        );
         assert_eq!(token("JobId=42", "Missing="), None);
     }
 

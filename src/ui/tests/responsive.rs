@@ -329,7 +329,52 @@ fn adaptive_command_hints_scale_gracefully_with_terminal_width() {
     // 4. Footer selection hint when items are selected
     let selected_footer = footer_line(120, 10, 3, "", "", "", 0, false);
     assert!(
-        selected_footer.contains("3 selected (Enter open · c clear)"),
-        "Footer must show '(Enter open · c clear)' when items are selected: {selected_footer}"
+        selected_footer.contains("3 selected"),
+        "Footer must show '3 selected' when items are selected: {selected_footer}"
+    );
+}
+
+#[test]
+fn interactive_toast_hints_teach_command_shortcuts_and_expire_cleanly() {
+    let mut notice = None;
+
+    // 1. Selection toast includes open and clear hints
+    set_notice(&mut notice, "2 selected (Enter open · c clear)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "2 selected (Enter open · c clear)"
+    );
+    let line = footer_text(10, 2, "", "", &notice.as_ref().unwrap().0);
+    assert!(line.contains("2 selected (Enter open · c clear)"));
+
+    // 2. Cluster switch toast includes navigation hints
+    set_notice(&mut notice, "Cluster: sprint (Tab next · Shift-Tab prev)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Cluster: sprint (Tab next · Shift-Tab prev)"
+    );
+
+    // 3. Group expand toast includes collapse and details hints
+    set_notice(
+        &mut notice,
+        "Group expanded (← collapse · i details on job)",
+    );
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Group expanded (← collapse · i details on job)"
+    );
+
+    // 4. Group collapse toast includes expand and mark hints
+    set_notice(&mut notice, "Group collapsed (→ expand · Space mark all)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Group collapsed (→ expand · Space mark all)"
+    );
+
+    // 5. Refresh toast includes history hints
+    set_notice(&mut notice, "Scheduler refreshed (r refresh · o history)");
+    assert_eq!(
+        notice.as_ref().unwrap().0,
+        "Scheduler refreshed (r refresh · o history)"
     );
 }

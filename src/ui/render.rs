@@ -164,13 +164,8 @@ fn blocked_summary(count: usize, shown: bool) -> String {
 }
 
 fn footer_text(rows: usize, selected: usize, query: &str, warning: &str, notice: &str) -> String {
-    let selection = if selected > 0 {
-        format!("{selected} selected (Enter open · c clear)")
-    } else {
-        "0 selected".to_string()
-    };
     format!(
-        "{rows} rows, {selection}{}{}{}",
+        "{rows} rows, {selected} selected{}{}{}",
         if query.is_empty() {
             String::new()
         } else {

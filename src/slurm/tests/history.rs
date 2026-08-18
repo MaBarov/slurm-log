@@ -192,19 +192,22 @@ fn pending_reasons_distinguish_blocked_dependency_failures_from_actionable_waits
         ..Job::default()
     };
     assert!(dead_dep.blocked_category());
-    assert_eq!(
-        dead_dep.insight(),
-        "dependency can never be satisfied"
-    );
+    assert_eq!(dead_dep.insight(), "dependency can never be satisfied");
 
     // 2. Non-blocked category: Actionable pending reasons that should remain visible in default view
     for (reason, expected_explanation) in [
         ("Priority", "waiting behind higher-priority jobs"),
         ("Resources", "waiting for requested resources"),
         ("Dependency", "waiting for a dependency"),
-        ("QOSMaxJobsPerUserLimit", "waiting on an account or QOS limit"),
+        (
+            "QOSMaxJobsPerUserLimit",
+            "waiting on an account or QOS limit",
+        ),
         ("AssocMaxJobsLimit", "waiting on an account or QOS limit"),
-        ("ReqNodeNotAvail, UnavailableNodes:node01", "requested node is unavailable"),
+        (
+            "ReqNodeNotAvail, UnavailableNodes:node01",
+            "requested node is unavailable",
+        ),
         ("BeginTime", "waiting for its requested begin time"),
         ("Reservation", "waiting for a reservation"),
         ("Licenses", "waiting for a license"),
@@ -297,12 +300,18 @@ fn heterogeneous_queue_correctly_partitions_live_and_blocked_jobs() {
 
     // 1. Default live view (show_blocked = false): only non-blocked batch jobs appear
     let live_default = visible_jobs(all_queue.clone(), &ledger, HistoryMode::Live, false);
-    assert_eq!(live_default, vec![batch_running.clone(), batch_pending.clone()]);
+    assert_eq!(
+        live_default,
+        vec![batch_running.clone(), batch_pending.clone()]
+    );
 
     // 2. Blocked count calculation
     let eligible = visible_jobs(all_queue.clone(), &ledger, HistoryMode::Live, true);
     let blocked_count = eligible.iter().filter(|j| j.blocked_category()).count();
-    assert_eq!(blocked_count, 3, "Expected 3 blocked jobs (1 dead dep + 2 interactive)");
+    assert_eq!(
+        blocked_count, 3,
+        "Expected 3 blocked jobs (1 dead dep + 2 interactive)"
+    );
 
     // 3. Blocked view (show_blocked = true, e.g. pressing 'b'): all 5 jobs appear
     let live_blocked = visible_jobs(all_queue.clone(), &ledger, HistoryMode::Live, true);
@@ -310,11 +319,22 @@ fn heterogeneous_queue_correctly_partitions_live_and_blocked_jobs() {
 
     // 4. Suppressing an interactive allocation hides it from live blocked view
     let mut suppressed_ledger = Ledger::default();
-    suppressed_ledger.dismissed.insert(interactive_python.key(), "now".into());
+    suppressed_ledger
+        .dismissed
+        .insert(interactive_python.key(), "now".into());
 
-    let suppressed_live = visible_jobs(all_queue.clone(), &suppressed_ledger, HistoryMode::Live, true);
+    let suppressed_live = visible_jobs(
+        all_queue.clone(),
+        &suppressed_ledger,
+        HistoryMode::Live,
+        true,
+    );
     assert_eq!(suppressed_live.len(), 4);
-    assert!(!suppressed_live.iter().any(|j| j.id == interactive_python.id));
+    assert!(
+        !suppressed_live
+            .iter()
+            .any(|j| j.id == interactive_python.id)
+    );
 
     // 5. In All/Archive history mode, suppressed interactive job still reappears in historical accounting
     let archive_view = visible_jobs(all_queue, &suppressed_ledger, HistoryMode::All, true);
@@ -329,7 +349,7 @@ fn interactive_interpreters_and_shells_across_various_paths_are_recognized() {
         "python",
         "python3",
         "/usr/bin/python3",
-        "/storage1/mansur/venvs/e1/bin/python",
+        "/storage/cluster/venvs/e1/bin/python",
         "/opt/conda/bin/python3.10",
         "ipython",
         "/home/user/.local/bin/ipython",

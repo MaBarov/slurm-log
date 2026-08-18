@@ -247,48 +247,6 @@ fn toggle_notices_are_explicit_and_expire_after_about_1500ms() {
     assert!(footer_text(4, 1, "", "", &message).contains(&message));
 }
 
-#[test]
-fn interactive_toast_hints_teach_command_shortcuts_and_expire_cleanly() {
-    let mut notice = None;
-
-    // 1. Selection toast includes open and clear hints
-    set_notice(&mut notice, "2 selected (Enter open · c clear)");
-    assert_eq!(
-        notice.as_ref().unwrap().0,
-        "2 selected (Enter open · c clear)"
-    );
-    let line = footer_text(10, 2, "", "", &notice.as_ref().unwrap().0);
-    assert!(line.contains("2 selected (Enter open · c clear)"));
-
-    // 2. Cluster switch toast includes navigation hints
-    set_notice(&mut notice, "Cluster: sprint (Tab next · Shift-Tab prev)");
-    assert_eq!(
-        notice.as_ref().unwrap().0,
-        "Cluster: sprint (Tab next · Shift-Tab prev)"
-    );
-
-    // 3. Group expand toast includes collapse and details hints
-    set_notice(&mut notice, "Group expanded (← collapse · i details on job)");
-    assert_eq!(
-        notice.as_ref().unwrap().0,
-        "Group expanded (← collapse · i details on job)"
-    );
-
-    // 4. Group collapse toast includes expand and mark hints
-    set_notice(&mut notice, "Group collapsed (→ expand · Space mark all)");
-    assert_eq!(
-        notice.as_ref().unwrap().0,
-        "Group collapsed (→ expand · Space mark all)"
-    );
-
-    // 5. Refresh toast includes history hints
-    set_notice(&mut notice, "Scheduler refreshed (r refresh · o history)");
-    assert_eq!(
-        notice.as_ref().unwrap().0,
-        "Scheduler refreshed (r refresh · o history)"
-    );
-}
-
 mod responsive;
 
 #[test]

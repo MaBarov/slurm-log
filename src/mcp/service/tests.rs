@@ -112,11 +112,15 @@ fn mcp_service_dispatch_and_inspection_helpers_cover_all_branches() {
     let filter_args = JsonObject::from_iter([
         ("cluster".into(), Value::String("alpha".into())),
         ("search".into(), Value::String("train".into())),
-        ("states".into(), Value::Array(vec![Value::String("RUNNING".into())])),
+        (
+            "states".into(),
+            Value::Array(vec![Value::String("RUNNING".into())]),
+        ),
     ]);
     let _ = server.list_jobs(&filter_args);
 
     // Inspect job missing arguments
-    let missing_inspect = JsonObject::from_iter([("cluster".into(), Value::String("alpha".into()))]);
+    let missing_inspect =
+        JsonObject::from_iter([("cluster".into(), Value::String("alpha".into()))]);
     assert!(server.inspect_job(&missing_inspect).is_err());
 }

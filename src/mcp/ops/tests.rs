@@ -152,11 +152,29 @@ fn mcp_ops_tools_handle_arguments_and_fallbacks() {
     let server = McpServer::new(config.clone());
 
     // Missing / invalid job arguments
-    assert!(server.explain_pending(&object(json!({"cluster":"local"}))).is_err());
-    assert!(server.explain_pending(&object(json!({"cluster":"nonexistent","job_id":"1"}))).is_err());
+    assert!(
+        server
+            .explain_pending(&object(json!({"cluster":"local"})))
+            .is_err()
+    );
+    assert!(
+        server
+            .explain_pending(&object(json!({"cluster":"nonexistent","job_id":"1"})))
+            .is_err()
+    );
 
-    assert!(server.wait_job(&object(json!({"cluster":"local"}))).is_err());
-    assert!(server.wait_job(&object(json!({"cluster":"local","job_id":"999","timeout_seconds":1}))).is_err());
+    assert!(
+        server
+            .wait_job(&object(json!({"cluster":"local"})))
+            .is_err()
+    );
+    assert!(
+        server
+            .wait_job(&object(
+                json!({"cluster":"local","job_id":"999","timeout_seconds":1})
+            ))
+            .is_err()
+    );
 
     let adopt_missing = object(json!({
         "cluster": "local",

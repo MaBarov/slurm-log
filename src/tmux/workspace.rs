@@ -145,7 +145,7 @@ fn setup(config: &Config, session: &str) -> Result<()> {
         "-t",
         session,
         "window-status-current-format",
-        &format,
+        format,
     ]);
     push_cmd(&[
         "set-option",

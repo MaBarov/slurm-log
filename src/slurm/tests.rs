@@ -329,9 +329,21 @@ fn scheduler_query_lock_is_private_and_cross_process_exclusive() {
         .write(true)
         .open(&lock_path)
         .unwrap();
-    assert!(rustix::fs::flock(&second, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err());
+    assert!(
+        rustix::fs::flock(
+            &second,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive
+        )
+        .is_err()
+    );
     drop(first);
-    assert!(rustix::fs::flock(&second, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok());
+    assert!(
+        rustix::fs::flock(
+            &second,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive
+        )
+        .is_ok()
+    );
 }
 
 mod history;

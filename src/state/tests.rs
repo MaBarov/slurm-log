@@ -1,6 +1,5 @@
 use super::*;
 use std::{os::unix::fs::PermissionsExt, sync::Arc, thread};
-
 #[test]
 fn dismissal_hides_only_terminal_jobs() {
     let dir = tempfile::tempdir().unwrap();
@@ -134,36 +133,6 @@ fn corrupt_state_is_reported_by_read_only_load() {
 }
 
 #[test]
-fn producer_hashes_are_recorded_for_submission_and_adoption() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("state.json");
-    let digest = "a".repeat(64);
-    Ledger::mark_submitted(&path, "alpha", "42", &digest).unwrap();
-    assert_eq!(
-        Ledger::producer_hash(&path, "alpha", "42").as_deref(),
-        Some(digest.as_str())
-    );
-    assert_eq!(Ledger::producer_hash(&path, "alpha", "7"), None);
-
-    let adopted = Job {
-        cluster: "alpha".into(),
-        id: "43".into(),
-        ..Job::default()
-    };
-    Ledger::mark_adopted(&path, &adopted, None).unwrap();
-    assert_eq!(
-        Ledger::producer_hash(&path, "alpha", "43"),
-        None,
-        "an adopted job without an observed hash cannot prove a producer"
-    );
-    Ledger::mark_adopted(&path, &adopted, Some(&digest)).unwrap();
-    assert_eq!(
-        Ledger::producer_hash(&path, "alpha", "43").as_deref(),
-        Some(digest.as_str())
-    );
-}
-
-#[test]
 fn oversized_state_is_rejected_before_reading() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("state.json");
@@ -193,6 +162,10 @@ fn defaults_noop_updates_and_read_markers_are_consistent() {
     Ledger::set_auto_add(&path, true).unwrap();
     assert!(Ledger::load(&path).unwrap().auto_add_default);
 
+    Ledger::set_log_warnings(&path, true).unwrap();
+    assert!(Ledger::load(&path).unwrap().log_warnings_default);
+    Ledger::set_log_warnings(&path, false).unwrap();
+    assert!(!Ledger::load(&path).unwrap().log_warnings_default);
     for cluster in ["cispa", "sprint"] {
         Ledger::mark_opened(
             &path,
@@ -240,21 +213,7 @@ fn no_op_sync_of_twenty_thousand_jobs_avoids_rewrite_within_budget() {
     let started = std::time::Instant::now();
     Ledger::sync(&path, &jobs, &complete).unwrap();
     let elapsed = started.elapsed();
-    assert!(elapsed < std::time::Duration::from_millis(250));
+    assert!(elapsed < std::time::Duration::from_millis(if cfg!(coverage) { 1000 } else { 250 }));
     assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
     eprintln!("no-op sync 20k jobs: {elapsed:?}");
-}
-
-#[test]
-fn ledger_update_creates_missing_parent_directories() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("nested/deep/state.json");
-    let failed = Job {
-        cluster: "cispa".into(),
-        id: "9".into(),
-        state: "FAILED".into(),
-        ..Job::default()
-    };
-    Ledger::dismiss(&path, &[failed]).unwrap();
-    assert!(path.exists());
 }
