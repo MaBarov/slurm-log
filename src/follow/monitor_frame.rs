@@ -87,3 +87,22 @@ fn render_monitor(frame: &str, previous: &mut String) -> io::Result<()> {
     previous.push_str(frame);
     Ok(())
 }
+fn pending_message(config: &Config, job: &Job) -> String {
+    let resolved = if job.reason.is_empty() {
+        slurm::final_details(config, job)
+    } else {
+        job.clone()
+    };
+    let tag = resolved.pending_tag();
+    if tag.is_empty() {
+        format!(
+            "[{}] job {} is pending; waiting for its log file…",
+            job.cluster, job.id
+        )
+    } else {
+        format!(
+            "[{}] job {} is pending ({tag}); waiting for its log file…",
+            job.cluster, job.id
+        )
+    }
+}

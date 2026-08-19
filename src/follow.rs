@@ -73,12 +73,10 @@ pub fn run(
     io::stdout().flush()?;
     let mut command;
     let cluster = config.cluster(&job.cluster)?;
+    let pending_notice = pending_message(config, job);
     if !cluster.remote() {
         if !Path::new(&path).exists() {
-            println!(
-                "[{}] job {} is pending; waiting for its log file…",
-                job.cluster, job.id
-            );
+            println!("{pending_notice}");
         }
         while !Path::new(&path).exists() {
             thread::sleep(Duration::from_secs(1));
@@ -87,10 +85,10 @@ pub fn run(
         command.args(["-n", &lines.to_string(), "-F", "--", &path]);
     } else {
         let qp = shell_quote(&path);
-        let qj = shell_quote(&job.id);
-        let qc = shell_quote(&job.cluster);
+        let qmsg = shell_quote(&pending_notice);
+        let qhead = shell_quote(&format!("[{}] {}", job.cluster, path));
         let remote = format!(
-            "if [ ! -e {qp} ]; then printf '[%s] job %s is pending; waiting for its log file…\\n' {qc} {qj}; fi; while [ ! -e {qp} ]; do sleep 1; done; printf '\\033[3J\\033[2J\\033[H[%s] %s\\n' {qc} {qp}; exec tail -n {lines} -F -- {qp}"
+            "if [ ! -e {qp} ]; then printf '%s\\n' {qmsg}; fi; while [ ! -e {qp} ]; do sleep 1; done; printf '\\033[3J\\033[2J\\033[H%s\\n' {qhead}; exec tail -n {lines} -F -- {qp}"
         );
         command = Command::new("ssh");
         // `tail` is non-interactive. Allocating an SSH TTY lets a forced SSH

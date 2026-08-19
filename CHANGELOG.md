@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3
+
+- Include categorized pending reason in log follower wait messages:
+  e.g. `[cispa] job 3241528 is pending (Resources); waiting for its log file…`
+  (Resources, Priority, Rate Limit, Quota Limit, Dependency, etc.).
+
 ## 0.6.2
 
 - Fix `sstat` live process metrics sampling: remove unsupported `AllocTRES`

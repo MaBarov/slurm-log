@@ -392,3 +392,39 @@ fn supervision_returns_shell_interrupt_status_without_polling_scheduler() {
     .unwrap();
     assert_eq!(code, 130);
 }
+
+#[test]
+fn pending_message_formats_reason_tag_or_falls_back_cleanly() {
+    let config = Config {
+        local_user: "offline".into(),
+        remote_user: "offline".into(),
+        ssh_host: String::new(),
+        state_path: "/tmp/state.json".into(),
+        executable: "slurm-log".into(),
+        sbatch_banks: Vec::new(),
+        clusters: Vec::new(),
+    };
+    let mut job = Job {
+        cluster: "cispa".into(),
+        id: "3241528".into(),
+        state: "PENDING".into(),
+        reason: "Resources".into(),
+        ..Job::default()
+    };
+    assert_eq!(
+        pending_message(&config, &job),
+        "[cispa] job 3241528 is pending (Resources); waiting for its log file…"
+    );
+
+    job.reason = "QOSMaxJobsPerUserLimit".into();
+    assert_eq!(
+        pending_message(&config, &job),
+        "[cispa] job 3241528 is pending (Rate Limit); waiting for its log file…"
+    );
+
+    job.reason = "None".into();
+    assert_eq!(
+        pending_message(&config, &job),
+        "[cispa] job 3241528 is pending; waiting for its log file…"
+    );
+}
