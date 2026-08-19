@@ -73,10 +73,23 @@ impl Client {
     }
 
     fn run(&self, args: &[String]) -> Result<Output> {
-        Command::new(&self.program)
-            .args(args)
-            .output()
-            .with_context(|| format!("run {}", self.name()))
+        let mut attempts = 0;
+        loop {
+            match Command::new(&self.program).args(args).output() {
+                Ok(output) => return Ok(output),
+                Err(err)
+                    if attempts < 5
+                        && (err.kind() == io::ErrorKind::ExecutableFileBusy
+                            || err.raw_os_error() == Some(26)) =>
+                {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(err) => {
+                    return Err(err).with_context(|| format!("run {}", self.name()));
+                }
+            }
+        }
     }
 
     fn exists(&self) -> bool {
@@ -268,16 +281,21 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = directory.path().join("registered");
         let program = directory.path().join("codex");
-        fs::write(
-            &program,
-            format!(
-                "#!/bin/sh\ncase \"$*\" in\n'mcp get slurm-log --json') test -f '{}' ;;\n'mcp add slurm-log -- '*) touch '{}' ;;\n'mcp remove slurm-log') rm -f '{}' ;;\n*) exit 2 ;;\nesac\n",
-                state.display(),
-                state.display(),
-                state.display()
-            ),
-        )
-        .unwrap();
+        {
+            use std::io::Write;
+            let mut file = fs::File::create(&program).unwrap();
+            file.write_all(
+                format!(
+                    "#!/bin/sh\ncase \"$*\" in\n'mcp get slurm-log --json') test -f '{}' ;;\n'mcp add slurm-log -- '*) touch '{}' ;;\n'mcp remove slurm-log') rm -f '{}' ;;\n*) exit 2 ;;\nesac\n",
+                    state.display(),
+                    state.display(),
+                    state.display()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            file.sync_all().unwrap();
+        }
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
         let client = Client {
             kind: ClientKind::Codex,
