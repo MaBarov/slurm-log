@@ -164,7 +164,7 @@ fn pending_tags_and_state_display_format_cleanly() {
         ..Job::default()
     };
     assert_eq!(resources.pending_tag(), "Resources");
-    assert_eq!(resources.state_display(), "PENDING");
+    assert_eq!(resources.state_display(), "Resources");
 
     let rate_limit = Job {
         state: "PENDING".into(),
@@ -172,7 +172,7 @@ fn pending_tags_and_state_display_format_cleanly() {
         ..Job::default()
     };
     assert_eq!(rate_limit.pending_tag(), "Rate Limit");
-    assert_eq!(rate_limit.state_display(), "PENDING");
+    assert_eq!(rate_limit.state_display(), "Rate Limit");
 
     let quota_limit = Job {
         state: "PENDING".into(),
@@ -180,7 +180,7 @@ fn pending_tags_and_state_display_format_cleanly() {
         ..Job::default()
     };
     assert_eq!(quota_limit.pending_tag(), "Quota Limit");
-    assert_eq!(quota_limit.state_display(), "PENDING");
+    assert_eq!(quota_limit.state_display(), "Quota Limit");
     let running = Job {
         state: "RUNNING".into(),
         ..Job::default()

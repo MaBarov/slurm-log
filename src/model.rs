@@ -61,7 +61,6 @@ impl Job {
     pub fn completed(&self) -> bool {
         self.state.starts_with("COMPLETED")
     }
-    #[allow(dead_code)]
     pub fn pending_tag(&self) -> &str {
         if !self.pending() {
             return "";
@@ -111,7 +110,16 @@ impl Job {
     }
 
     pub fn state_display(&self) -> &str {
-        self.state.as_str()
+        if self.pending() {
+            let tag = self.pending_tag();
+            if tag.is_empty() {
+                "PENDING"
+            } else {
+                tag
+            }
+        } else {
+            self.state.as_str()
+        }
     }
 
     pub fn blocked_category(&self) -> bool {
