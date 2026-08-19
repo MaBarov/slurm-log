@@ -84,12 +84,36 @@ fn running_sstat_sample_updates_usage_without_losing_allocation() {
         elapsed: "00:10:00".into(),
         ..Job::default()
     };
-    let sample = "42.batch|8|cpu=8,mem=32G|00:07:30|8G|4G|gres/gpuutil=50|gres/gpumem=4G";
+    let sample = "42.batch|8|00:07:30|8G|4G|gres/gpuutil=50|gres/gpumem=4G";
     let details = merge_running(previous, job, sample);
     assert_eq!(details.source, "sstat");
     assert_eq!(details.cpu_efficiency, Some(75.0));
     assert_eq!(details.memory_efficiency, Some(25.0));
     assert_eq!(details.gpu_utilization, Some(50.0));
+}
+#[test]
+fn running_sstat_merges_live_process_samples_correctly() {
+    let previous = JobDetails {
+        id: "463740".into(),
+        cpus: 8,
+        memory_bytes: 48 * 1024 * 1024 * 1024,
+        ..JobDetails::default()
+    };
+    let job = Job {
+        id: "463740".into(),
+        state: "RUNNING".into(),
+        elapsed: "00:03:00".into(),
+        ..Job::default()
+    };
+    let sstat_output = "463740.batch|1|00:01:30|2G|1G||gres/gpumem=1G\n\
+                        463740.0|1|00:01:00|4G|2G|gres/gpuutil=95|gres/gpumem=3G";
+    let details = merge_running(previous, job, sstat_output);
+    assert_eq!(details.total_cpu_seconds, 150);
+    assert_eq!(details.cpu_efficiency, Some(10.416666666666666));
+    assert_eq!(details.max_rss_bytes, 4 * 1024 * 1024 * 1024);
+    assert_eq!(details.gpu_utilization, Some(95.0));
+    assert_eq!(details.gpu_memory_bytes, Some(3 * 1024 * 1024 * 1024));
+    assert_eq!(details.source, "sstat");
 }
 
 #[test]
@@ -271,9 +295,9 @@ fn running_sample_aggregates_steps_and_ignores_other_jobs() {
         elapsed: "00:10:00".into(),
         ..Job::default()
     };
-    let samples = "42.batch|2|cpu=2|00:02:00|1G||gres/gpuutil=20|gres/gpumem=2G\n\
-                       42.0|2|cpu=2|00:03:00|3G||gres/gpuutil=80|gres/gpumem=4G\n\
-                       99.batch|99|cpu=99|01:00:00|99G||gres/gpuutil=99|gres/gpumem=99G";
+    let samples = "42.batch|2|00:02:00|1G||gres/gpuutil=20|gres/gpumem=2G\n\
+                   42.0|2|00:03:00|3G||gres/gpuutil=80|gres/gpumem=4G\n\
+                   99.batch|99|01:00:00|99G||gres/gpuutil=99|gres/gpumem=99G";
     let parsed = merge_running(previous, job, samples);
     assert_eq!(parsed.total_cpu_seconds, 600);
     assert_eq!(parsed.max_rss_bytes, 3 * 1024 * 1024 * 1024);
@@ -315,7 +339,7 @@ fn slurm_time_sentinels_and_impossible_cpu_samples_are_not_displayed() {
         elapsed: "0:24".into(),
         ..Job::default()
     };
-    let sentinel = "42.batch|16|cpu=16|18446744073709551614|1G||||";
+    let sentinel = "42.batch|16|18446744073709551614|1G|||";
     let parsed = merge_running(previous, job, sentinel);
     assert_eq!(parsed.total_cpu_seconds, 120);
     assert_eq!(parsed.cpu_efficiency, Some(31.25));

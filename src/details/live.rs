@@ -9,7 +9,7 @@ fn sample_running(
     // immediately before this supplemental metadata access and bind the
     // rendered state to that fresh object.
     let job = crate::slurm::authorize_exact_job(config, cluster, id)?;
-    let fields = "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,AveRSS,TRESUsageInAve,TRESUsageInMax";
+    let fields = "JobID,NTasks,AveCPU,MaxRSS,AveRSS,TRESUsageInAve,TRESUsageInMax";
     let cluster_option = crate::slurm::accounting_cluster_option(config, cluster)?;
     let command = format!(
         "sstat{cluster_option} -a -j {} -n -P --format={} 2>/dev/null",
@@ -34,15 +34,15 @@ fn merge_running(mut details: JobDetails, job: Job, output: &str) -> JobDetails 
         .lines()
         .map(|line| line.split('|').collect::<Vec<_>>())
     {
-        if fields.len() < 8 || fields[0].split('.').next().unwrap_or(fields[0]) != details.id {
+        if fields.len() < 7 || fields[0].split('.').next().unwrap_or(fields[0]) != details.id {
             continue;
         }
         let tasks = number(fields[1]).unwrap_or(1);
-        if let Some(cpu) = parse_duration(fields[3]).and_then(|value| value.checked_mul(tasks)) {
+        if let Some(cpu) = parse_duration(fields[2]).and_then(|value| value.checked_mul(tasks)) {
             total_cpu = Some(total_cpu.unwrap_or(0).saturating_add(cpu));
         }
-        max_rss = max_rss.max(parse_bytes(fields[4]).unwrap_or(0));
-        for value in [fields[6], fields[7]] {
+        max_rss = max_rss.max(parse_bytes(fields[3]).unwrap_or(0));
+        for value in [fields[5], fields[6]] {
             if let Some(util) = tres_value(value, "gres/gpuutil")
                 .and_then(|value| value.trim_end_matches('%').parse::<f64>().ok())
                 .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
