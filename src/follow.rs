@@ -271,7 +271,7 @@ fn run_interactive_monitor(
                 });
                 render_monitor(&interactive_frame(&final_job, true), &mut rendered)?;
                 wait_for_enter();
-                crate::state::Ledger::suppress(&config.state_path, &final_job)?;
+                crate::state::Ledger::mark_opened(&config.state_path, &final_job)?;
                 close_monitor_pane(pane);
                 return Ok(0);
             }
@@ -285,7 +285,7 @@ fn run_interactive_monitor(
             && key.kind == KeyEventKind::Press
             && close_key(key.code)
         {
-            crate::state::Ledger::suppress(&config.state_path, &current)?;
+            crate::state::Ledger::mark_opened(&config.state_path, &current)?;
             close_monitor_pane(pane);
             return Ok(0);
         }

@@ -73,5 +73,5 @@ while tmux has-session -t "$session" 2>/dev/null; do
     }
     sleep 0.01
 done
-grep -F '"dismissed":{"cispa:9":' "$test_root/state/state.json" >/dev/null
-printf 'interactive_pane: ok (live monitor, safe Enter close + list suppression; fully offline)\n'
+grep -F '"opened":{"cispa:9":' "$test_root/state/state.json" >/dev/null
+printf 'interactive_pane: ok (live monitor, safe Enter close + mark opened; fully offline)\n'

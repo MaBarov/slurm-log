@@ -140,10 +140,10 @@ EOF
     >"$test_root/interactive.out"
 grep -F 'INTERACTIVE ALLOCATION' "$test_root/interactive.out" >/dev/null
 grep -F 'allocation keeps running' "$test_root/interactive.out" >/dev/null
-grep -F '"dismissed":{"remote:44":' "$test_root/state/interactive.json" >/dev/null
+grep -F '"opened":{"remote:44":' "$test_root/state/interactive.json" >/dev/null
 
 # A pending ID that fails before publishing stdout renders the final state and
-# waits for Enter before suppressing the listing entry.
+# waits for Enter before closing and marking the entry read.
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 case "$*" in
@@ -168,7 +168,7 @@ EOF
     >"$test_root/ended.out"
 grep -F 'allocation has ended' "$test_root/ended.out" >/dev/null
 grep -F 'FAILED' "$test_root/ended.out" >/dev/null
-grep -F '"dismissed":{"ended:45":' "$test_root/state/ended.json" >/dev/null
+grep -F '"opened":{"ended:45":' "$test_root/state/ended.json" >/dev/null
 
 # The corresponding successful pre-log completion uses the finished alert and
 # final monitor frame rather than the failure branch.
@@ -196,6 +196,6 @@ EOF
     >"$test_root/finished.out"
 grep -F 'allocation has ended' "$test_root/finished.out" >/dev/null
 grep -F 'COMPLETED' "$test_root/finished.out" >/dev/null
-grep -F '"dismissed":{"finished:47":' "$test_root/state/finished.json" >/dev/null
+grep -F '"opened":{"finished:47":' "$test_root/state/finished.json" >/dev/null
 
 printf 'follower_paths: ok (remote/local/interactive/completion; fully offline)\n'
