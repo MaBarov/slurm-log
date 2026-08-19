@@ -268,9 +268,9 @@ impl McpServer {
             "cluster": cluster,
             "job_id": id,
             "pending": true,
-            "reason": reason,
+            "reason": reason.clone(),
+            "explanation": crate::model::pending_explanation(&reason),
             "reservation_conflict": reservation_conflict,
-            "requested_partition": requested,
             "compatible_partitions": compatible,
             "all_partitions": partitions,
             "note": "MCP never auto-switches partitions; a scheduling-only resubmission preview would show the exact delta (partition and nothing else)"

@@ -87,11 +87,17 @@ fn draw(
         "Job",
         &format!("{}:{}  {}", details.cluster, details.id, details.name),
     )?;
-    line(
-        &mut out,
-        "State",
-        &format!("{}  {}", details.state, clean(&details.reason)),
-    )?;
+    let state_text = if details.state.starts_with("PENDING") {
+        let explanation = crate::model::pending_explanation(&details.reason);
+        if explanation.is_empty() || explanation == "pending" {
+            format!("{}  {}", details.state, clean(&details.reason))
+        } else {
+            format!("{}  {} ({})", details.state, explanation, clean(&details.reason))
+        }
+    } else {
+        format!("{}  {}", details.state, clean(&details.reason))
+    };
+    line(&mut out, "State", &state_text)?;
     line(
         &mut out,
         "Time",
