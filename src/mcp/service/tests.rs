@@ -2,18 +2,28 @@ use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use super::*;
 use crate::{
-    config::{ClusterConfig, Config},
+    config::{ClusterConfig, Config, SbatchBankConfig},
     mcp::McpServer,
 };
 
 fn server(state: PathBuf) -> McpServer {
+    let bank = state.parent().unwrap().join("bank");
+    std::fs::create_dir_all(&bank).unwrap();
+    std::fs::write(
+        bank.join("train.sbatch"),
+        "#!/bin/sh\n#SBATCH --job-name=train\n",
+    )
+    .unwrap();
     let config = Config {
         local_user: "offline".into(),
         remote_user: "offline".into(),
         ssh_host: String::new(),
         state_path: state,
         executable: PathBuf::from("/bin/false"),
-        sbatch_banks: Vec::new(),
+        sbatch_banks: vec![SbatchBankConfig {
+            path: bank,
+            name: None,
+        }],
         clusters: vec![ClusterConfig {
             name: "alpha".into(),
             controller: None,

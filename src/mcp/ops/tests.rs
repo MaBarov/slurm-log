@@ -60,13 +60,23 @@ fn probe_status_formats_expected_strings() {
 #[test]
 fn mcp_ops_doctor_and_refresh_bank_round_trip() {
     let directory = tempfile::tempdir().unwrap();
+    let bank = directory.path().join("bank");
+    std::fs::create_dir(&bank).unwrap();
+    std::fs::write(
+        bank.join("train.sbatch"),
+        "#!/bin/sh\n#SBATCH --job-name=train\n",
+    )
+    .unwrap();
     let config = Config {
         local_user: "offline".into(),
         remote_user: "offline".into(),
         ssh_host: "offline.invalid".into(),
         state_path: directory.path().join("state.json"),
         executable: std::path::PathBuf::from("slurm-log"),
-        sbatch_banks: Vec::new(),
+        sbatch_banks: vec![crate::config::SbatchBankConfig {
+            path: bank,
+            name: None,
+        }],
         clusters: vec![crate::config::ClusterConfig {
             name: "local".into(),
             controller: None,

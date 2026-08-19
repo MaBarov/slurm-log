@@ -325,7 +325,12 @@ impl McpServer {
     pub(crate) fn current_bank_config(&self) -> Result<Config> {
         let current = Config::load_for_setup().context("reload sbatch bank configuration")?;
         let mut config = self.config.as_ref().clone();
-        config.sbatch_banks = current.sbatch_banks;
+        // Keep the server's own banks when the reload finds none, so a server
+        // built with an explicit bank list stays hermetic on hosts without a
+        // slurm-log configuration.
+        if !current.sbatch_banks.is_empty() {
+            config.sbatch_banks = current.sbatch_banks;
+        }
         config.validate()?;
         Ok(config)
     }
