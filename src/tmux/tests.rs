@@ -248,6 +248,12 @@ fn watcher_command_constructs_proper_follower_invocation() {
     let quiet_cmd = watcher(&config, &j, 50, false);
     assert!(!quiet_cmd.iter().any(|arg| arg == "--show-log-warnings"));
     assert!(quiet_cmd.iter().any(|arg| arg == "50"));
+
+    let mut pending_j = job("101", "PENDING");
+    pending_j.reason = "Resources".into();
+    let pending_cmd = watcher(&config, &pending_j, 50, false);
+    assert!(pending_cmd.iter().any(|arg| arg == "--reason"));
+    assert!(pending_cmd.iter().any(|arg| arg == "Resources"));
 }
 
 #[test]

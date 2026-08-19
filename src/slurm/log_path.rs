@@ -163,9 +163,10 @@ fn usable_stdout(value: Option<&str>) -> Option<&str> {
 }
 
 pub fn final_details(config: &Config, job: &Job) -> Job {
-    if config
-        .cluster(&job.cluster)
-        .is_ok_and(|cluster| cluster.accounting)
+    if !job.pending()
+        && config
+            .cluster(&job.cluster)
+            .is_ok_and(|cluster| cluster.accounting)
         && let Ok(controller) = controller_option(config, &job.cluster)
     {
         let command = format!(

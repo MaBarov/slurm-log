@@ -242,6 +242,7 @@ fn run() -> Result<()> {
             cluster: args.mode,
             id: id.into(),
             state: args.initial_state,
+            reason: args.reason,
             ..Job::default()
         };
         if args.pane_follow {

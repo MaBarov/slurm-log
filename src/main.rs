@@ -44,6 +44,7 @@ struct Args {
     refresh: u64,
     archive: bool,
     initial_state: String,
+    reason: String,
     local_user: Option<String>,
     remote_user: Option<String>,
     ssh_host: Option<String>,
@@ -65,6 +66,7 @@ fn parse_args() -> Result<Args> {
     let mut fzf = false;
     let mut refresh = 3;
     let mut initial_state = String::new();
+    let mut reason = String::new();
     let mut local_user = None;
     let mut remote_user = None;
     let mut ssh_host = None;
@@ -108,6 +110,11 @@ fn parse_args() -> Result<Args> {
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("state required"))?
             }
+            "--reason" => {
+                reason = values
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("reason required"))?;
+            }
             "--local-user" => local_user = values.next(),
             "--remote-user" => remote_user = values.next(),
             "--ssh-host" => ssh_host = values.next(),
@@ -142,6 +149,7 @@ fn parse_args() -> Result<Args> {
         refresh,
         archive,
         initial_state,
+        reason,
         local_user,
         remote_user,
         ssh_host,

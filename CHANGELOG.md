@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4
+
+- Forward job pending reason when spawning tmux follower panes via `--reason`.
+- Fix pending job metadata resolution on accounting-enabled clusters: bypass
+  `sacct` for pending jobs and query live `scontrol` metadata so pending reason
+  tags (`Resources`, `Priority`, `Rate Limit`, etc.) are always rendered.
+
 ## 0.6.3
 
 - Include categorized pending reason in log follower wait messages:

@@ -29,12 +29,14 @@ fn watcher(config: &Config, job: &Job, lines: usize, show_log_warnings: bool) ->
         lines.to_string(),
         "--initial-state".into(),
         job.state.clone(),
-        job.cluster.clone(),
-        job.id.clone(),
     ]);
-    if show_log_warnings {
-        values.insert(values.len() - 2, "--show-log-warnings".into());
+    if !job.reason.is_empty() {
+        values.extend(["--reason".into(), job.reason.clone()]);
     }
+    if show_log_warnings {
+        values.push("--show-log-warnings".into());
+    }
+    values.extend([job.cluster.clone(), job.id.clone()]);
     values
 }
 
