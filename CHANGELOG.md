@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+- Fix GPU count and model extraction in details view when Slurm clusters omit
+  GRES from `AllocTRES`/`ReqTRES`: fall back to `TresPerNode`, `TresPerJob`, `Gres`,
+  and colon-delimited GRES syntax (`gres/gpu:1`, `gres/gpu:a40:1`, `gpu:a100:2`).
+- Fix non-stdout and interactive monitor exit: closing the monitor pane now marks
+  the job opened instead of blacklisting it into `dismissed`, keeping active
+  and blocked jobs visible in the picker list.
+
 ## 0.6.0
 
 - Replace the `PENDING` label in the list-view STATE column with the
