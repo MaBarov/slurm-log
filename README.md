@@ -19,20 +19,31 @@ Requirements:
 - Rust/Cargo only when rebuilding instead of using the bundled Linux binary
 - `sacct` only on clusters where accounting is enabled
 
-Install a signed x86-64 Linux release only after obtaining its Ed25519 public
-key PEM from an independent, trusted channel (for example, a reviewed source
-commit or an organization-controlled deployment record):
+Install the latest signed x86-64 Linux release with one command:
 
 ```bash
-sh install.sh --release-public-key /secure/path/slurm-log-release-public.pem
+curl -fsSL https://github.com/MaBarov/slurm-log/releases/latest/download/install.sh | bash
 ```
 
-The installer requires that PEM for every prebuilt download. It verifies the
-detached manifest signature before downloading the archive, then checks the
-signed size and digest before extraction or starting the candidate binary. Do
-not obtain the PEM from the same release URL, archive, or mutable mirror being
-verified. The script does not require Rust. To pin a release, use
-`sh install.sh --version v0.2.4 --release-public-key /secure/path/key.pem`.
+The installer downloads the Ed25519 public key from the release channel and
+verifies the detached manifest signature before downloading the archive, then
+checks the signed size and digest before extraction or starting the candidate
+binary. It does not require Rust. When piped from `curl` it reattaches to your
+terminal for the setup wizard; in fully noninteractive sessions run
+`slurm-log setup` afterwards.
+
+Pin a specific release tag by fetching the installer pinned to that tag:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MaBarov/slurm-log/v0.5.0/install.sh | bash -s -- --version v0.5.0
+```
+
+Deployments that manage their own trust anchor can pass an explicit PEM from
+an independent channel instead:
+
+```bash
+curl -fsSL https://github.com/MaBarov/slurm-log/releases/latest/download/install.sh | bash -s -- --release-public-key /secure/path/slurm-log-release-public.pem
+```
 
 Alternatively, extract a shared release archive and run:
 

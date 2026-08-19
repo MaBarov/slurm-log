@@ -41,10 +41,11 @@ allow_downgrade=0
 force_config=0
 path_update=1
 run_setup=1
-release_tmp=
+release_tmp= key_tmp=
 
 cleanup() {
     [ -z "$release_tmp" ] || rm -rf "$release_tmp"
+    [ -z "$key_tmp" ] || rm -rf "$key_tmp"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -195,6 +196,26 @@ version_less() {
             exit 1;
         }'
 }
+# Resolve the release trust anchor.  An explicit --release-public-key PEM
+# wins; otherwise the public key is downloaded from the release channel
+# itself (same trust level as the archive).
+ensure_release_key() {
+    if [ -n "$release_public_key_file" ]; then
+        [ -f "$release_public_key_file" ] && [ ! -L "$release_public_key_file" ] && \
+            [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -gt 0 ] && \
+            [ "$(wc -c <"$release_public_key_file" | tr -d ' ')" -le "$max_manifest_bytes" ] && return 0
+        printf 'The --release-public-key PEM is missing or invalid.\n' >&2
+        return 2
+    fi
+    key_tmp=$(mktemp -d) || return 1
+    umask 077
+    release_public_key_file=$key_tmp/release-public-key.pem
+    if ! download_file "$release_base/release-public-key.pem" "$release_public_key_file" "$max_manifest_bytes"; then
+        printf 'Could not download the release public key.\n' >&2
+        return 1
+    fi
+}
+
 
 verify_manifest() {
     manifest=$1
@@ -287,6 +308,7 @@ download_release() {
     checksum=$archive.sha256
     manifest=$archive.manifest
     signature=$manifest.sig
+    ensure_release_key || return $?
     printf 'Downloading signed slurm-log %s for Linux %s...\n' "$release_version" "$architecture"
     if ! download_file "$release_base/$asset.manifest" "$manifest" "$max_manifest_bytes" ||
        ! download_file "$release_base/$asset.manifest.sig" "$signature" "$max_signature_bytes"; then
