@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2
+
+- Fix `sstat` live process metrics sampling: remove unsupported `AllocTRES`
+  field from the `sstat` format specification so queries succeed on Slurm 22+.
+
 ## 0.6.1
 
 - Fix GPU count and model extraction in details view when Slurm clusters omit
