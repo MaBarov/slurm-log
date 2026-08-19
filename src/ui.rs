@@ -16,7 +16,7 @@ use crossterm::{
 
 use crate::{
     config::Config,
-    model::Job,
+    model::{Job, StateFilter},
     slurm::{self, HistoryMode},
     state::Ledger,
 };

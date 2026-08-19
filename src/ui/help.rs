@@ -20,6 +20,7 @@ fn help_lines() -> &'static [&'static str] {
         "  o                 Cycle history: 2h, 12h, 1d, 1w, all, live",
         "  a                 Toggle all accounting history / live jobs",
         "  b                 Toggle blocked and interactive jobs",
+        "  f                 Filter state: all, running, pending, failed",
         "  r                 Refresh the scheduler now",
         "  /                 Search all displayed fields; Enter applies, Esc cancels",
         "  Esc               Clear search; press again to leave the picker",
@@ -97,6 +98,7 @@ fn draw_popup(
     cluster: &str,
     notice: &str,
     blocked_count: usize,
+    state_filter: StateFilter,
     previous: &mut Vec<String>,
 ) -> Result<()> {
     let (width, height) = terminal::size()?;
@@ -113,6 +115,7 @@ fn draw_popup(
         log_warnings,
         cluster,
         blocked_count,
+        state_filter,
     );
     let header_rows = header.lines.len().min(height.saturating_sub(2) as usize);
     let table_row = header_rows;

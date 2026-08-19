@@ -197,16 +197,16 @@ fn pending_reasons_distinguish_blocked_dependency_failures_from_actionable_waits
     // 2. Non-blocked category: Actionable pending reasons that should remain visible in default view
     for (reason, expected_explanation) in [
         ("Priority", "waiting behind higher-priority jobs"),
-        ("Resources", "waiting for requested resources"),
+        ("Resources", "waiting for requested compute resources"),
         ("Dependency", "waiting for a dependency"),
         (
             "QOSMaxJobsPerUserLimit",
-            "waiting on an account or QOS limit",
+            "rate limit: user job limit for QOS",
         ),
-        ("AssocMaxJobsLimit", "waiting on an account or QOS limit"),
+        ("AssocMaxJobsLimit", "rate limit: account job limit reached"),
         (
             "ReqNodeNotAvail, UnavailableNodes:node01",
-            "requested node is unavailable",
+            "requested node(s) unavailable or in maintenance",
         ),
         ("BeginTime", "waiting for its requested begin time"),
         ("Reservation", "waiting for a reservation"),

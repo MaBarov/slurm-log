@@ -53,11 +53,12 @@ impl TableLayout {
             if selected { "*" } else { " " },
             if nested { "↳" } else { " " }
         );
+        let state = job.state_display();
         self.row(
             &prefix,
             &job.cluster,
             &job.id,
-            &job.state,
+            &state,
             &job.elapsed,
             &display_name(job),
         )

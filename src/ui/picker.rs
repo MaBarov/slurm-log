@@ -33,6 +33,7 @@ pub fn pick(
     }
     let mut expanded = HashSet::new();
     let mut query = String::new();
+    let mut state_filter = StateFilter::All;
     let mut show_warnings = false;
     let mut show_log_warnings = ledger.log_warnings_default;
     let mut show_help = false;

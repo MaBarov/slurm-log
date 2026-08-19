@@ -62,13 +62,16 @@ fn command_rows(width: usize, manage: bool, labelled_rows: bool) -> Vec<HeaderLi
         command("Enter", if manage { "apply" } else { "open" }),
     ];
     if width >= 115 {
+        commands.push(command("f", "filter"));
         commands.push(command("i", "details"));
         commands.push(command("s", "submit"));
         commands.push(command("d", "dismiss"));
     } else if width >= 95 {
+        commands.push(command("f", "filter"));
         commands.push(command("i", "details"));
         commands.push(command("s", "submit"));
     } else if width >= 80 {
+        commands.push(command("f", "filter"));
         commands.push(command("i", "details"));
     }
     commands.extend([
@@ -78,7 +81,7 @@ fn command_rows(width: usize, manage: bool, labelled_rows: bool) -> Vec<HeaderLi
     ]);
     let prefix = if labelled_rows { "KEYS    " } else { "" };
     let continuation = " ".repeat(UnicodeWidthStr::width(prefix));
-    let separator = if labelled_rows { " · " } else { "  ·  " };
+    let separator = if labelled_rows || width < 125 { " · " } else { "  ·  " };
     let full = labelled("KEYS", join(commands.clone(), separator));
     if labelled_rows && full.width() <= width {
         return vec![full];
@@ -151,6 +154,7 @@ fn picker_header_lines(
     log_warnings: bool,
     cluster: &str,
     blocked_count: usize,
+    state_filter: StateFilter,
 ) -> HeaderLayout {
     let usable = width.saturating_sub(1) as usize;
     if width < 44 || height < 7 {
@@ -181,72 +185,46 @@ fn picker_header_lines(
         "A",
         &[
             ("AUTO", HeaderTone::Plain),
-            (
-                if auto_add { "ON" } else { "OFF" },
-                if auto_add {
-                    HeaderTone::Green
-                } else {
-                    HeaderTone::Muted
-                },
-            ),
+            (if auto_add { "ON" } else { "OFF" }, if auto_add { HeaderTone::Green } else { HeaderTone::Muted }),
         ],
     );
     let blocked_number = blocked_count.to_string();
     let blocked_chip = chip(
         "b",
         &[
-            (
-                "BLOCKED",
-                if blocked_count > 0 {
-                    HeaderTone::Amber
-                } else {
-                    HeaderTone::Plain
-                },
-            ),
-            (
-                &blocked_number,
-                if blocked_count > 0 {
-                    HeaderTone::Amber
-                } else {
-                    HeaderTone::Muted
-                },
-            ),
-            (
-                if blocked { "SHOWN" } else { "HIDDEN" },
-                if blocked {
-                    HeaderTone::Cyan
-                } else {
-                    HeaderTone::Muted
-                },
-            ),
+            ("BLOCKED", if blocked_count > 0 { HeaderTone::Amber } else { HeaderTone::Plain }),
+            (&blocked_number, if blocked_count > 0 { HeaderTone::Amber } else { HeaderTone::Muted }),
+            (if blocked { "SHOWN" } else { "HIDDEN" }, if blocked { HeaderTone::Cyan } else { HeaderTone::Muted }),
         ],
     );
     let warning_chip = chip(
         "W",
         &[
             ("WARN", HeaderTone::Plain),
-            (
-                if log_warnings { "ON" } else { "OFF" },
-                if log_warnings {
-                    HeaderTone::Amber
-                } else {
-                    HeaderTone::Muted
-                },
-            ),
+            (if log_warnings { "ON" } else { "OFF" }, if log_warnings { HeaderTone::Amber } else { HeaderTone::Muted }),
         ],
     );
-
+    let state_tone = match state_filter {
+        StateFilter::All => HeaderTone::Muted,
+        StateFilter::Running => HeaderTone::Green,
+        StateFilter::Pending | StateFilter::Failed => HeaderTone::Amber,
+    };
+    let state_chip = chip(
+        "f",
+        &[("STATE", HeaderTone::Plain), (state_filter.label(), state_tone)],
+    );
     let wide_status = {
         let mut line = span("slurm-log  ", HeaderTone::Label);
         line.append(join(
             vec![
                 cluster_chip.clone(),
                 window_chip.clone(),
+                state_chip.clone(),
                 auto_chip.clone(),
                 blocked_chip.clone(),
                 warning_chip.clone(),
             ],
-            "  ",
+            " ",
         ));
         line
     };
@@ -299,7 +277,7 @@ fn picker_header_lines(
     let compact_warning = keyed(
         "W",
         &[(
-            if log_warnings { "warnings on" } else { "warnings off" },
+            if log_warnings { "warn on" } else { "warn off" },
             if log_warnings { HeaderTone::Amber } else { HeaderTone::Muted },
         )],
     );
@@ -314,10 +292,21 @@ fn picker_header_lines(
             " · ",
         ),
     );
+    let compact_state_label = match state_filter {
+        StateFilter::All => "all states",
+        StateFilter::Running => "running only",
+        StateFilter::Pending => "pending only",
+        StateFilter::Failed => "failed only",
+    };
+    let compact_state = keyed("f", &[(compact_state_label, state_tone)]);
     let compact_filter = labelled(
         "FILTER",
         join(
-            vec![compact_blocked.clone(), compact_warning.clone()],
+            vec![
+                compact_state,
+                compact_blocked.clone(),
+                compact_warning.clone(),
+            ],
             " · ",
         ),
     );

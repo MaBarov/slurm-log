@@ -15,12 +15,7 @@
                 KeyCode::PageDown => help_offset = (help_offset + page).min(maximum),
                 KeyCode::Home | KeyCode::Char('g') => help_offset = 0,
                 KeyCode::End | KeyCode::Char('G') => help_offset = maximum,
-                KeyCode::Char('q') => {
-                    return Ok(PickResult {
-                        jobs: Vec::new(),
-                        show_log_warnings,
-                    });
-                }
+                KeyCode::Char('q') => return Ok(PickResult { jobs: Vec::new(), show_log_warnings }),
                 _ => {}
             }
             continue;
@@ -33,24 +28,14 @@
             KeyCode::Char('d' | 'o' | 'a' | 'b' | 'r' | 'x') | KeyCode::Tab | KeyCode::BackTab
         );
         match key.code {
-            KeyCode::Char('q') => {
-                return Ok(PickResult {
-                    jobs: Vec::new(),
-                    show_log_warnings,
-                });
-            }
+            KeyCode::Char('q') => return Ok(PickResult { jobs: Vec::new(), show_log_warnings }),
             KeyCode::Esc if !query.is_empty() => {
                 query.clear();
                 set_notice(&mut notice, "Search cleared");
                 view_dirty = true;
                 popup_frame.clear();
             }
-            KeyCode::Esc => {
-                return Ok(PickResult {
-                    jobs: Vec::new(),
-                    show_log_warnings,
-                });
-            }
+            KeyCode::Esc => return Ok(PickResult { jobs: Vec::new(), show_log_warnings }),
             KeyCode::Up | KeyCode::Char('k') => focus = focus.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 focus = (focus + 1).min(rows.len().saturating_sub(1))
@@ -307,6 +292,11 @@
                     );
                     view_dirty = true;
                 }
+            }
+            KeyCode::Char('f') => {
+                state_filter = state_filter.next();
+                set_notice(&mut notice, state_filter.notice());
+                view_dirty = true;
             }
             KeyCode::Char('w') => {
                 show_warnings = !show_warnings;

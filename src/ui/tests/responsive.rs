@@ -15,6 +15,7 @@ fn header(width: u16, height: u16) -> HeaderLayout {
         false,
         "all",
         1,
+        StateFilter::All,
     )
 }
 
@@ -25,11 +26,11 @@ fn wide_header_is_the_compact_control_strip() {
     assert!(!layout.too_small);
     assert_eq!(
         lines[0],
-        "slurm-log  [Tab ALL]  [o LIVE ≤2m]  [A AUTO ON]  [b BLOCKED 1 HIDDEN]  [W WARN OFF]"
+        "slurm-log  [Tab ALL] [o LIVE ≤2m] [f STATE ALL] [A AUTO ON] [b BLOCKED 1 HIDDEN] [W WARN OFF]"
     );
     assert_eq!(
         lines[1],
-        "↑↓ move  ·  Space mark  ·  Enter open  ·  i details  ·  s submit  ·  d dismiss  ·  / find  ·  ? help  ·  q quit"
+        "↑↓ move · Space mark · Enter open · f filter · i details · s submit · d dismiss · / find · ? help · q quit"
     );
     assert!(lines[2].chars().all(|character| character == '─'));
     assert_eq!(UnicodeWidthStr::width(lines[2].as_str()), 119);
@@ -43,7 +44,9 @@ fn medium_header_recomposes_into_aligned_rows() {
         let layout = header(width, 20);
         let lines = plain(&layout);
         assert!(lines[0].starts_with("STATUS  [Tab] ALL · [o] LIVE ≤2m · [A] AUTO ON"));
-        assert!(lines[1].starts_with("FILTER  [b] 1 blocked hidden · [W] warnings off"));
+        assert!(
+            lines[1].starts_with("FILTER  [f] all states · [b] 1 blocked hidden · [W] warn off")
+        );
         assert!(lines.iter().any(|line| line.starts_with("KEYS    ↑↓ move")));
         assert!(
             lines
@@ -109,6 +112,7 @@ fn every_state_and_history_mode_stays_explicit() {
             true,
             "cluster-with-a-name-that-is-far-too-long",
             12_345,
+            StateFilter::All,
         );
         let text = plain(&layout).join("\n");
         assert!(text.contains(label));
@@ -239,6 +243,7 @@ fn blocked_status_chip_and_footer_toggle_accurately_reflect_visibility_state() {
         false,
         "all",
         5,
+        StateFilter::All,
     );
     let hidden_plain = plain(&hidden_header);
     assert!(
@@ -264,6 +269,7 @@ fn blocked_status_chip_and_footer_toggle_accurately_reflect_visibility_state() {
         false,
         "all",
         5,
+        StateFilter::All,
     );
     let shown_plain = plain(&shown_header);
     assert!(
@@ -289,6 +295,7 @@ fn blocked_status_chip_and_footer_toggle_accurately_reflect_visibility_state() {
         false,
         "all",
         0,
+        StateFilter::All,
     );
     let zero_plain = plain(&zero_header);
     assert!(
@@ -323,9 +330,8 @@ fn adaptive_command_hints_scale_gracefully_with_terminal_width() {
     // 3. Standard terminal (84 cols): shows details
     let std = header(84, 20);
     let std_plain = plain(&std);
-    assert!(std_plain[1].contains("i details"));
-    assert!(!std_plain[1].contains("s submit"));
-
+    assert!(std_plain.iter().any(|line| line.contains("i details")));
+    assert!(!std_plain.iter().any(|line| line.contains("s submit")));
     // 4. Footer selection hint when items are selected
     let selected_footer = footer_line(120, 10, 3, "", "", "", 0, false);
     assert!(

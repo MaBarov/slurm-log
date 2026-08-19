@@ -53,6 +53,9 @@
                 .iter()
                 .enumerate()
                 .filter_map(|(index, job)| {
+                    if !state_filter.matches(job) {
+                        return None;
+                    }
                     if needle.is_empty() {
                         return Some(index);
                     }
@@ -88,6 +91,7 @@
                     live_filter.as_ref().map_or("all", |(cluster, _)| cluster),
                     notice.as_ref().map_or("", |(message, _)| message),
                     blocked_count,
+                    state_filter,
                     &mut popup_frame,
                 )?;
             } else {
@@ -107,6 +111,7 @@
                     live_filter.as_ref().map_or("all", |(cluster, _)| cluster),
                     notice.as_ref().map_or("", |(message, _)| message),
                     blocked_count,
+                    state_filter,
                 )?;
             }
             redraw = false;

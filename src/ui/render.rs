@@ -15,6 +15,7 @@ fn draw(
     cluster: &str,
     notice: &str,
     blocked_count: usize,
+    state_filter: StateFilter,
 ) -> Result<()> {
     // Assemble the frame before writing it. Do not use synchronized-update
     // escapes here: tmux popups can repaint their border for those sequences.
@@ -30,6 +31,7 @@ fn draw(
         log_warnings,
         cluster,
         blocked_count,
+        state_filter,
     );
     if header.too_small {
         return draw_too_small(&header, width, height);

@@ -58,11 +58,70 @@ impl Job {
         .iter()
         .any(|state| self.state.starts_with(state))
     }
+    pub fn pending_tag(&self) -> &str {
+        if !self.pending() {
+            return "";
+        }
+        let reason = self.reason.trim_matches(['(', ')']);
+        if reason == "Resources" {
+            "Resources"
+        } else if reason == "Priority" {
+            "Priority"
+        } else if reason.starts_with("QOSMaxJobs")
+            || reason.starts_with("QOSMaxSubmit")
+            || reason == "JobArrayTaskLimit"
+            || reason.starts_with("PartitionMaxJobs")
+            || reason.starts_with("PartitionJob")
+        {
+            "Rate Limit"
+        } else if reason.starts_with("QOS")
+            || reason.starts_with("Assoc")
+            || reason.starts_with("Partition")
+            || reason.starts_with("Association")
+        {
+            "Quota Limit"
+        } else if reason.starts_with("DependencyNeverSatisfied") {
+            "Dep Failed"
+        } else if reason.starts_with("Dependency") {
+            "Dependency"
+        } else if reason.starts_with("ReqNodeNotAvail")
+            || reason == "NodeDown"
+            || reason == "NodeDrain"
+        {
+            "Node Unavail"
+        } else if reason == "BadConstraints" {
+            "Bad Constraints"
+        } else if reason == "BeginTime" {
+            "Begin Time"
+        } else if reason.starts_with("Reservation") {
+            "Reservation"
+        } else if reason.starts_with("Licenses") {
+            "License"
+        } else if reason.starts_with("JobHold") {
+            "Held"
+        } else if reason.is_empty() || reason == "None" {
+            ""
+        } else {
+            reason
+        }
+    }
+
+    pub fn state_display(&self) -> String {
+        if self.pending() {
+            let tag = self.pending_tag();
+            if tag.is_empty() {
+                self.state.clone()
+            } else {
+                format!("PENDING ({tag})")
+            }
+        } else {
+            self.state.clone()
+        }
+    }
 
     pub fn blocked_category(&self) -> bool {
         self.interactive || self.reason.contains("DependencyNeverSatisfied")
     }
-
     pub fn insight(&self) -> String {
         if self.pending() {
             let explanation = pending_explanation(&self.reason);
@@ -95,32 +154,115 @@ impl Job {
     }
 }
 
-fn pending_explanation(reason: &str) -> String {
+pub fn pending_explanation(reason: &str) -> String {
     let reason = reason.trim_matches(['(', ')']);
     let explanation = if reason == "Priority" {
         "waiting behind higher-priority jobs"
     } else if reason == "Resources" {
-        "waiting for requested resources"
+        "waiting for requested compute resources"
     } else if reason.starts_with("DependencyNeverSatisfied") {
         "dependency can never be satisfied"
     } else if reason.starts_with("Dependency") {
         "waiting for a dependency"
+    } else if reason.starts_with("QOSMaxJobs") || reason.starts_with("QOSMaxSubmit") {
+        "rate limit: user job limit for QOS"
+    } else if reason.starts_with("QOSMax")
+        || reason.starts_with("QOSMin")
+        || reason.starts_with("QOSUsage")
+        || reason.starts_with("QOSResource")
+    {
+        "quota limit: QOS resource limit reached"
+    } else if reason.starts_with("QOSJob")
+        || reason.starts_with("QOSGroupJobs")
+        || reason.starts_with("QOSGroupSubmit")
+    {
+        "rate limit: QOS job limit reached"
+    } else if reason.starts_with("QOSGroup") {
+        "quota limit: QOS group limit reached"
+    } else if reason.starts_with("AssocMaxJobs") || reason.starts_with("AssocMaxSubmit") {
+        "rate limit: account job limit reached"
+    } else if reason.starts_with("AssocMax") {
+        "quota limit: account resource limit reached"
+    } else if reason.starts_with("Association") {
+        "quota limit: account limit reached"
+    } else if reason == "JobArrayTaskLimit" {
+        "rate limit: array task concurrency limit reached"
+    } else if reason.starts_with("PartitionMaxJobs") || reason.starts_with("PartitionJob") {
+        "rate limit: partition job limit reached"
+    } else if reason.starts_with("Partition") {
+        "quota limit: partition limit reached"
     } else if reason.starts_with("QOS") || reason.starts_with("Assoc") {
         "waiting on an account or QOS limit"
-    } else if reason.starts_with("ReqNodeNotAvail") {
-        "requested node is unavailable"
+    } else if reason.starts_with("ReqNodeNotAvail") || reason == "NodeDown" || reason == "NodeDrain"
+    {
+        "requested node(s) unavailable or in maintenance"
+    } else if reason == "BadConstraints" {
+        "invalid or unsatisfied node constraints"
     } else if reason == "BeginTime" {
         "waiting for its requested begin time"
     } else if reason.starts_with("Reservation") {
         "waiting for a reservation"
     } else if reason.starts_with("Licenses") {
         "waiting for a license"
+    } else if reason.starts_with("JobHold") {
+        "held by administrator or user"
     } else if reason.is_empty() || reason == "None" {
         "pending"
     } else {
         reason
     };
     explanation.to_string()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
+pub enum StateFilter {
+    #[default]
+    All,
+    Running,
+    Pending,
+    Failed,
+}
+
+impl StateFilter {
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Running,
+            Self::Running => Self::Pending,
+            Self::Pending => Self::Failed,
+            Self::Failed => Self::All,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "ALL",
+            Self::Running => "RUNNING",
+            Self::Pending => "PENDING",
+            Self::Failed => "FAILED",
+        }
+    }
+
+    pub fn notice(self) -> &'static str {
+        match self {
+            Self::All => "State filter: ALL (f cycle: all · running · pending · failed)",
+            Self::Running => {
+                "State filter: RUNNING only (f cycle: all · running · pending · failed)"
+            }
+            Self::Pending => {
+                "State filter: PENDING only (f cycle: all · running · pending · failed)"
+            }
+            Self::Failed => "State filter: FAILED only (f cycle: all · running · pending · failed)",
+        }
+    }
+
+    pub fn matches(self, job: &Job) -> bool {
+        match self {
+            Self::All => true,
+            Self::Running => job.running(),
+            Self::Pending => job.pending(),
+            Self::Failed => job.failed(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -170,154 +312,5 @@ pub fn token<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn job_ids() {
-        assert!(valid_job_id("3202710"));
-        assert!(valid_job_id("3202690_1"));
-        assert!(!valid_job_id("3202690_1_2"));
-        assert!(!valid_job_id("abc"));
-        for invalid in ["", "_", "1_", "_1", "1-2", " 1", "1\n", "١٢٣"] {
-            assert!(!valid_job_id(invalid), "accepted invalid ID {invalid:?}");
-        }
-        for valid in ["0", "00001", "1_0", "999999999999999999999999"] {
-            assert!(valid_job_id(valid), "rejected valid ID {valid:?}");
-        }
-        assert_eq!(token("JobId=42 UserId=owner(1000)", "JobId="), Some("42"));
-        assert_eq!(
-            token("JobId=42 UserId=owner(1000)", "UserId="),
-            Some("owner(1000)")
-        );
-        assert_eq!(token("JobId=42", "Missing="), None);
-    }
-
-    #[test]
-    fn terminal_text_escapes_controls() {
-        assert_eq!(
-            terminal_text("name\x1b]52;c;bad\x07\r\n"),
-            "name\\x1b]52;c;bad\\u{7}\\r\\n"
-        );
-    }
-
-    #[test]
-    fn state_classification_handles_slurm_suffixes() {
-        for state in [
-            "FAILED",
-            "FAILED+",
-            "TIMEOUT",
-            "OUT_OF_MEMORY",
-            "NODE_FAIL",
-            "CANCELLED by 1",
-        ] {
-            assert!(
-                Job {
-                    state: state.into(),
-                    ..Job::default()
-                }
-                .failed()
-            );
-        }
-        assert!(
-            Job {
-                state: "RUNNING+".into(),
-                ..Job::default()
-            }
-            .running()
-        );
-        assert!(
-            Job {
-                state: "PENDING".into(),
-                ..Job::default()
-            }
-            .pending()
-        );
-        assert!(
-            !Job {
-                state: "COMPLETED".into(),
-                ..Job::default()
-            }
-            .active()
-        );
-    }
-
-    #[test]
-    fn insights_explain_pending_and_failed_jobs() {
-        let pending = Job {
-            state: "PENDING".into(),
-            reason: "Resources".into(),
-            start_time: "2026-08-11T18:00:00".into(),
-            priority: "1234".into(),
-            ..Job::default()
-        };
-        let insight = pending.insight();
-        assert!(insight.contains("waiting for requested resources"));
-        assert!(insight.contains("estimated start"));
-        assert!(insight.contains("priority 1234"));
-
-        let failed = Job {
-            state: "OUT_OF_MEMORY".into(),
-            exit_code: "0:9".into(),
-            max_rss: "63G".into(),
-            ..Job::default()
-        };
-        assert_eq!(failed.insight(), "exit 0:9 · peak memory 63G");
-    }
-
-    #[test]
-    fn insights_cover_every_scheduler_reason_and_empty_metadata() {
-        let cases = [
-            ("Priority", "higher-priority"),
-            ("(DependencyNeverSatisfied,foo)", "can never"),
-            ("Dependency", "a dependency"),
-            ("QOSGrpCpuLimit", "account or QOS"),
-            ("AssocMaxJobsLimit", "account or QOS"),
-            ("ReqNodeNotAvail", "node is unavailable"),
-            ("BeginTime", "begin time"),
-            ("Reservation", "reservation"),
-            ("Licenses", "license"),
-            ("None", "pending"),
-            ("", "pending"),
-            ("UnusualReason", "UnusualReason"),
-        ];
-        for (reason, expected) in cases {
-            let job = Job {
-                state: "PENDING".into(),
-                reason: reason.into(),
-                start_time: "N/A".into(),
-                ..Job::default()
-            };
-            assert!(job.insight().contains(expected), "reason={reason}");
-        }
-        let unknown = Job {
-            state: "PENDING".into(),
-            start_time: "Unknown".into(),
-            ..Job::default()
-        };
-        assert_eq!(unknown.insight(), "pending");
-    }
-
-    #[test]
-    fn job_helpers_cover_keys_blocking_and_empty_insights() {
-        let mut job = Job {
-            cluster: "alpha".into(),
-            id: "42".into(),
-            state: "COMPLETED".into(),
-            ..Job::default()
-        };
-        assert_eq!(job.key(), "alpha:42");
-        let mut reusable = String::from("old allocation");
-        job.write_key(&mut reusable);
-        assert_eq!(reusable, "alpha:42");
-        assert_eq!(job.insight(), "");
-        assert!(!job.blocked_category());
-        job.interactive = true;
-        assert!(job.blocked_category());
-
-        job.state = "FAILED".into();
-        job.exit_code = "0:0".into();
-        assert_eq!(job.insight(), "");
-        job.max_rss = "1G".into();
-        assert_eq!(job.insight(), "peak memory 1G");
-    }
-}
+#[path = "model/tests.rs"]
+mod tests;
