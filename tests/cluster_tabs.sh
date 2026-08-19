@@ -239,7 +239,7 @@ wait_for_screen_text "$popup_session" 'Blocked and interactive jobs shown'
 wait_for_screen_text "$popup_session" blocked-open-job
 screen=$(tmux capture-pane -p -t "$popup_session")
 printf '%s\n' "$screen" | grep -E '^.?>?\*.*999' >/dev/null
-printf '%s\n' "$screen" | grep -F PENDING >/dev/null
+printf '%s\n' "$screen" | grep -F 'Dep Failed' >/dev/null
 ! printf '%s\n' "$screen" | grep -F OPEN >/dev/null
 tmux send-keys -t "$popup_session" b
 wait_for_screen_text "$popup_session" 'Blocked and interactive jobs hidden'
