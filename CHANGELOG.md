@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Add state filter toggling in the list view (`f` key) cycling through
+  `ALL` → `RUNNING` → `PENDING` → `FAILED` → `COMPLETED` with header indicator badges.
+- Surface categorized pending reasons in job listings and detailed reason explanations
+  in the monitor/details frame for blocked or waiting jobs (Resources, Rate Limit,
+  Quota Limit, Dependency, License, Bad Constraints, etc.).
+
 ## 0.4.0
 
 - Add an interactive action toast system in the picker interface with 1.5-second
