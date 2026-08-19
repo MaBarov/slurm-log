@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Replace the `PENDING` label in the list-view STATE column with the
+  categorized pending reason (Resources, Rate Limit, Quota Limit, Dependency,
+  Held, etc.). Falls back to `PENDING` only when no reason is available.
+- Installer downloads the release public key from the release channel instead
+  of embedding it; reinstates the one-line `curl | bash` install command.
+
 ## 0.5.0
 
 - Add state filter toggling in the list view (`f` key) cycling through
