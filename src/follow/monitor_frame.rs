@@ -40,14 +40,38 @@ fn interactive_frame(job: &Job, ended: bool) -> String {
             prompt
         )
     } else {
+        let pending_note = if job.pending() {
+            let explanation = crate::model::pending_explanation(&job.reason);
+            let reason_detail = if explanation.is_empty() || explanation == "pending" {
+                if job.reason.is_empty() || job.reason == "None" {
+                    String::new()
+                } else {
+                    format!("Pending reason: {}\r\n", job.reason)
+                }
+            } else {
+                format!("Pending reason: {} ({explanation})\r\n", job.reason)
+            };
+            let start_info = if !job.start_time.is_empty()
+                && job.start_time != "N/A"
+                && job.start_time != "Unknown"
+            {
+                format!("Estimated start: {}\r\n", job.start_time)
+            } else {
+                String::new()
+            };
+            format!("{reason_detail}{start_info}")
+        } else {
+            String::new()
+        };
         format!(
-            "WAITING FOR LOG  {}:{}  {}\r\n{}  ·  elapsed {}\r\nPLACE  {}\r\n\r\nSlurm has not published this job's stdout path yet.\r\nslurm-log will attach automatically when it becomes available.\r\n\r\n{}\r\n",
+            "WAITING FOR LOG  {}:{}  {}\r\n{}  ·  elapsed {}\r\nPLACE  {}\r\n\r\n{}Slurm has not published this job's stdout path yet.\r\nslurm-log will attach automatically when it becomes available.\r\n\r\n{}\r\n",
             job.cluster,
             job.id,
             name,
             state,
             elapsed,
             if place.is_empty() { "—" } else { &place },
+            pending_note,
             prompt
         )
     }

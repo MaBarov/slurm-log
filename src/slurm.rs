@@ -248,47 +248,8 @@ fn interactive_command(command: &str) -> bool {
     }
     matches!(
         base,
-        "bash"
-            | "sh"
-            | "zsh"
-            | "fish"
-            | "csh"
-            | "tcsh"
-            | "nu"
-            | "dash"
-            | "ksh"
-            | "python"
-            | "ipython"
-            | "ipython3"
-            | "julia"
-            | "node"
-            | "nodejs"
-            | "bun"
-            | "deno"
-            | "ruby"
-            | "irb"
-            | "perl"
-            | "lua"
-            | "luajit"
-            | "matlab"
-            | "octave"
-            | "php"
-            | "gdb"
-            | "cuda-gdb"
-            | "lldb"
-            | "screen"
-            | "top"
-            | "htop"
-            | "btop"
-            | "nvtop"
-            | "R"
-            | "Rscript"
-            | "jupyter"
-            | "jupyter-lab"
-            | "jupyter-notebook"
-    ) || (base.starts_with("python3") && base[7..].chars().all(|c| c.is_ascii_digit() || c == '.'))
-        || (base.starts_with("python2")
-            && base[7..].chars().all(|c| c.is_ascii_digit() || c == '.'))
+        "bash" | "sh" | "zsh" | "fish" | "csh" | "tcsh" | "nu" | "dash" | "ksh" | "screen" | "tmux"
+    )
 }
 
 pub fn parse_recent(input: &str, cluster: &str) -> Vec<Job> {

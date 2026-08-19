@@ -166,6 +166,20 @@ fn queue_parser_classifies_shell_allocations_as_interactive() {
         "fish",
         "tcsh",
         "nu",
+        "bash",
+        "/bin/bash",
+        "sh",
+        "/bin/sh",
+        "screen",
+        "tmux",
+    ] {
+        assert!(interactive_command(command));
+    }
+    for command in [
+        "/work/train.sbatch",
+        "train.sbatch",
+        "run.sh",
+        "eval.slurm",
         "python",
         "python3",
         "/opt/venvs/e1/bin/python",
@@ -174,9 +188,6 @@ fn queue_parser_classifies_shell_allocations_as_interactive() {
         "node",
         "gdb",
     ] {
-        assert!(interactive_command(command));
-    }
-    for command in ["/work/train.sbatch", "train.sbatch", "run.sh", "eval.slurm"] {
         assert!(!interactive_command(command));
     }
     assert_eq!(queue_cache_name("cispa"), "queue-v3-cispa");
@@ -197,42 +208,29 @@ fn queue_parser_classifies_shell_allocations_as_interactive() {
 }
 
 #[test]
-fn interactive_allocation_python_should_be_classified_as_blocked() {
-    // An interactive allocation running python on sprint1 (salloc/srun with BatchFlag=0)
+fn python_compute_jobs_appear_in_default_live_view() {
+    // A python job submitted via sbatch or srun must NOT be hidden as blocked
     let raw_queue =
         "463107|RUNNING|python|0:42|sprint1|all|2026-08-17T15:37:15|1|/opt/venvs/e1/bin/python\n";
     let jobs = parse_queue(raw_queue, "sprint");
     assert_eq!(jobs.len(), 1);
     let job = &jobs[0];
 
-    // 1. Expected classification
     assert!(
-        job.interactive,
-        "Expected job running python to be classified as interactive"
+        !job.interactive,
+        "Python compute job must NOT be classified as an interactive shell"
     );
     assert!(
-        job.blocked_category(),
-        "Expected job running python to be in blocked category"
+        !job.blocked_category(),
+        "Python compute job must NOT be in blocked category"
     );
 
-    // 2. Expected listing behavior
     let ledger = Ledger::default();
-    // Should appear in blocked listing (slurm-log blocked / b toggle)
-    let blocked_jobs: Vec<_> = visible_jobs(vec![job.clone()], &ledger, HistoryMode::Live, true)
-        .into_iter()
-        .filter(|j| j.blocked_category())
-        .collect();
-    assert_eq!(
-        blocked_jobs.len(),
-        1,
-        "Expected job to appear in the blocked listing"
-    );
-
-    // Should NOT leak into the default live view when blocked jobs are hidden
     let default_view = visible_jobs(vec![job.clone()], &ledger, HistoryMode::Live, false);
-    assert!(
-        default_view.is_empty(),
-        "Expected interactive allocation to be hidden from default live view"
+    assert_eq!(
+        default_view.len(),
+        1,
+        "Python compute job must be visible in default live view"
     );
 }
 
@@ -336,6 +334,7 @@ fn scheduler_query_lock_is_private_and_cross_process_exclusive() {
         )
         .is_err()
     );
+    let _ = rustix::fs::flock(&first, rustix::fs::FlockOperation::Unlock);
     drop(first);
     assert!(
         rustix::fs::flock(

@@ -208,6 +208,7 @@ fn picker_header_lines(
         StateFilter::All => HeaderTone::Muted,
         StateFilter::Running => HeaderTone::Green,
         StateFilter::Pending | StateFilter::Failed => HeaderTone::Amber,
+        StateFilter::Completed => HeaderTone::Cyan,
     };
     let state_chip = chip(
         "f",
@@ -297,13 +298,14 @@ fn picker_header_lines(
         StateFilter::Running => "running only",
         StateFilter::Pending => "pending only",
         StateFilter::Failed => "failed only",
+        StateFilter::Completed => "completed only",
     };
     let compact_state = keyed("f", &[(compact_state_label, state_tone)]);
     let compact_filter = labelled(
         "FILTER",
         join(
             vec![
-                compact_state,
+                compact_state.clone(),
                 compact_blocked.clone(),
                 compact_warning.clone(),
             ],

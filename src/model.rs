@@ -58,6 +58,10 @@ impl Job {
         .iter()
         .any(|state| self.state.starts_with(state))
     }
+    pub fn completed(&self) -> bool {
+        self.state.starts_with("COMPLETED")
+    }
+    #[allow(dead_code)]
     pub fn pending_tag(&self) -> &str {
         if !self.pending() {
             return "";
@@ -106,17 +110,8 @@ impl Job {
         }
     }
 
-    pub fn state_display(&self) -> String {
-        if self.pending() {
-            let tag = self.pending_tag();
-            if tag.is_empty() {
-                self.state.clone()
-            } else {
-                format!("PENDING ({tag})")
-            }
-        } else {
-            self.state.clone()
-        }
+    pub fn state_display(&self) -> &str {
+        self.state.as_str()
     }
 
     pub fn blocked_category(&self) -> bool {
@@ -221,6 +216,7 @@ pub enum StateFilter {
     Running,
     Pending,
     Failed,
+    Completed,
 }
 
 impl StateFilter {
@@ -229,7 +225,8 @@ impl StateFilter {
             Self::All => Self::Running,
             Self::Running => Self::Pending,
             Self::Pending => Self::Failed,
-            Self::Failed => Self::All,
+            Self::Failed => Self::Completed,
+            Self::Completed => Self::All,
         }
     }
 
@@ -239,19 +236,27 @@ impl StateFilter {
             Self::Running => "RUNNING",
             Self::Pending => "PENDING",
             Self::Failed => "FAILED",
+            Self::Completed => "COMPLETED",
         }
     }
 
     pub fn notice(self) -> &'static str {
         match self {
-            Self::All => "State filter: ALL (f cycle: all · running · pending · failed)",
+            Self::All => {
+                "State filter: ALL (f cycle: all · running · pending · failed · completed)"
+            }
             Self::Running => {
-                "State filter: RUNNING only (f cycle: all · running · pending · failed)"
+                "State filter: RUNNING only (f cycle: all · running · pending · failed · completed)"
             }
             Self::Pending => {
-                "State filter: PENDING only (f cycle: all · running · pending · failed)"
+                "State filter: PENDING only (f cycle: all · running · pending · failed · completed)"
             }
-            Self::Failed => "State filter: FAILED only (f cycle: all · running · pending · failed)",
+            Self::Failed => {
+                "State filter: FAILED only (f cycle: all · running · pending · failed · completed)"
+            }
+            Self::Completed => {
+                "State filter: COMPLETED only (f cycle: all · running · pending · failed · completed)"
+            }
         }
     }
 
@@ -261,6 +266,7 @@ impl StateFilter {
             Self::Running => job.running(),
             Self::Pending => job.pending(),
             Self::Failed => job.failed(),
+            Self::Completed => job.completed(),
         }
     }
 }

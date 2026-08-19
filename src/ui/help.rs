@@ -20,7 +20,7 @@ fn help_lines() -> &'static [&'static str] {
         "  o                 Cycle history: 2h, 12h, 1d, 1w, all, live",
         "  a                 Toggle all accounting history / live jobs",
         "  b                 Toggle blocked and interactive jobs",
-        "  f                 Filter state: all, running, pending, failed",
+        "  f                 Filter state: all, running, pending, failed, completed",
         "  r                 Refresh the scheduler now",
         "  /                 Search all displayed fields; Enter applies, Esc cancels",
         "  Esc               Clear search; press again to leave the picker",

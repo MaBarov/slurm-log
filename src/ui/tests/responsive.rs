@@ -124,6 +124,53 @@ fn every_state_and_history_mode_stays_explicit() {
         assert!(layout.lines.iter().all(|line| line.width() < 120));
     }
 }
+#[test]
+fn all_state_filters_render_cleanly_across_widths() {
+    for filter in [
+        StateFilter::All,
+        StateFilter::Running,
+        StateFilter::Pending,
+        StateFilter::Failed,
+        StateFilter::Completed,
+    ] {
+        let wide = picker_header_lines(
+            120,
+            20,
+            false,
+            HistoryMode::Live,
+            true,
+            false,
+            false,
+            "all",
+            0,
+            filter,
+        );
+        let wide_text = plain(&wide).join("\n");
+        assert!(wide_text.contains(filter.label()));
+
+        for width in [83, 80, 70] {
+            let compact = picker_header_lines(
+                width,
+                20,
+                false,
+                HistoryMode::Live,
+                true,
+                false,
+                false,
+                "all",
+                0,
+                filter,
+            );
+            let lines = plain(&compact);
+            assert!(lines[1].contains("[f]"));
+            assert!(
+                lines
+                    .iter()
+                    .all(|l| UnicodeWidthStr::width(l.as_str()) < width as usize)
+            );
+        }
+    }
+}
 
 #[test]
 fn unicode_cell_width_and_ellipsis_are_correct() {

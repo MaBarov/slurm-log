@@ -58,7 +58,7 @@ impl TableLayout {
             &prefix,
             &job.cluster,
             &job.id,
-            &state,
+            state,
             &job.elapsed,
             &display_name(job),
         )

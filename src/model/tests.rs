@@ -164,7 +164,7 @@ fn pending_tags_and_state_display_format_cleanly() {
         ..Job::default()
     };
     assert_eq!(resources.pending_tag(), "Resources");
-    assert_eq!(resources.state_display(), "PENDING (Resources)");
+    assert_eq!(resources.state_display(), "PENDING");
 
     let rate_limit = Job {
         state: "PENDING".into(),
@@ -172,7 +172,7 @@ fn pending_tags_and_state_display_format_cleanly() {
         ..Job::default()
     };
     assert_eq!(rate_limit.pending_tag(), "Rate Limit");
-    assert_eq!(rate_limit.state_display(), "PENDING (Rate Limit)");
+    assert_eq!(rate_limit.state_display(), "PENDING");
 
     let quota_limit = Job {
         state: "PENDING".into(),
@@ -180,8 +180,7 @@ fn pending_tags_and_state_display_format_cleanly() {
         ..Job::default()
     };
     assert_eq!(quota_limit.pending_tag(), "Quota Limit");
-    assert_eq!(quota_limit.state_display(), "PENDING (Quota Limit)");
-
+    assert_eq!(quota_limit.state_display(), "PENDING");
     let running = Job {
         state: "RUNNING".into(),
         ..Job::default()
@@ -195,17 +194,20 @@ fn state_filter_cycles_and_matches_accurately() {
     assert_eq!(StateFilter::All.next(), StateFilter::Running);
     assert_eq!(StateFilter::Running.next(), StateFilter::Pending);
     assert_eq!(StateFilter::Pending.next(), StateFilter::Failed);
-    assert_eq!(StateFilter::Failed.next(), StateFilter::All);
+    assert_eq!(StateFilter::Failed.next(), StateFilter::Completed);
+    assert_eq!(StateFilter::Completed.next(), StateFilter::All);
 
     assert_eq!(StateFilter::All.label(), "ALL");
     assert_eq!(StateFilter::Running.label(), "RUNNING");
     assert_eq!(StateFilter::Pending.label(), "PENDING");
     assert_eq!(StateFilter::Failed.label(), "FAILED");
+    assert_eq!(StateFilter::Completed.label(), "COMPLETED");
 
     assert!(StateFilter::All.notice().contains("ALL"));
     assert!(StateFilter::Running.notice().contains("RUNNING"));
     assert!(StateFilter::Pending.notice().contains("PENDING"));
     assert!(StateFilter::Failed.notice().contains("FAILED"));
+    assert!(StateFilter::Completed.notice().contains("COMPLETED"));
 
     let running = Job {
         state: "RUNNING".into(),
@@ -241,4 +243,8 @@ fn state_filter_cycles_and_matches_accurately() {
     assert!(!StateFilter::Failed.matches(&pending));
     assert!(StateFilter::Failed.matches(&failed));
     assert!(!StateFilter::Failed.matches(&completed));
+    assert!(!StateFilter::Completed.matches(&running));
+    assert!(!StateFilter::Completed.matches(&pending));
+    assert!(!StateFilter::Completed.matches(&failed));
+    assert!(StateFilter::Completed.matches(&completed));
 }

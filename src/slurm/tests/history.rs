@@ -271,11 +271,11 @@ fn heterogeneous_queue_correctly_partitions_live_and_blocked_jobs() {
         reason: "DependencyNeverSatisfied".into(),
         ..Job::default()
     };
-    let interactive_python = Job {
+    let interactive_zsh = Job {
         cluster: "sprint".into(),
         id: "4".into(),
         state: "RUNNING".into(),
-        name: "python".into(),
+        name: "zsh".into(),
         interactive: true,
         ..Job::default()
     };
@@ -292,7 +292,7 @@ fn heterogeneous_queue_correctly_partitions_live_and_blocked_jobs() {
         batch_running.clone(),
         batch_pending.clone(),
         dead_dep.clone(),
-        interactive_python.clone(),
+        interactive_zsh.clone(),
         interactive_bash.clone(),
     ];
 
@@ -321,7 +321,7 @@ fn heterogeneous_queue_correctly_partitions_live_and_blocked_jobs() {
     let mut suppressed_ledger = Ledger::default();
     suppressed_ledger
         .dismissed
-        .insert(interactive_python.key(), "now".into());
+        .insert(interactive_zsh.key(), "now".into());
 
     let suppressed_live = visible_jobs(
         all_queue.clone(),
@@ -330,29 +330,18 @@ fn heterogeneous_queue_correctly_partitions_live_and_blocked_jobs() {
         true,
     );
     assert_eq!(suppressed_live.len(), 4);
-    assert!(
-        !suppressed_live
-            .iter()
-            .any(|j| j.id == interactive_python.id)
-    );
+    assert!(!suppressed_live.iter().any(|j| j.id == interactive_zsh.id));
 
     // 5. In All/Archive history mode, suppressed interactive job still reappears in historical accounting
     let archive_view = visible_jobs(all_queue, &suppressed_ledger, HistoryMode::All, true);
     assert_eq!(archive_view.len(), 5);
-    assert!(archive_view.iter().any(|j| j.id == interactive_python.id));
+    assert!(archive_view.iter().any(|j| j.id == interactive_zsh.id));
 }
 
 #[test]
 fn interactive_interpreters_and_shells_across_various_paths_are_recognized() {
-    // Verify various interactive command forms encountered in HPC environments
+    // Verify various interactive shell forms encountered in HPC environments
     for cmd in [
-        "python",
-        "python3",
-        "/usr/bin/python3",
-        "/storage/cluster/venvs/e1/bin/python",
-        "/opt/conda/bin/python3.10",
-        "ipython",
-        "/home/user/.local/bin/ipython",
         "bash",
         "/bin/bash",
         "sh",
@@ -362,13 +351,11 @@ fn interactive_interpreters_and_shells_across_various_paths_are_recognized() {
         "fish",
         "tcsh",
         "csh",
-        "julia",
-        "/opt/julia/bin/julia",
-        "R",
-        "gdb",
-        "cuda-gdb",
-        "node",
-        "matlab",
+        "nu",
+        "dash",
+        "ksh",
+        "screen",
+        "tmux",
     ] {
         assert!(
             interactive_command(cmd),
@@ -376,12 +363,26 @@ fn interactive_interpreters_and_shells_across_various_paths_are_recognized() {
         );
     }
 
-    // Verify batch commands and scripts are NOT treated as interactive
+    // Verify compute commands, interpreters, and scripts are NOT treated as interactive shells
     for non_interactive in [
         "train.sbatch",
         "/path/to/experiment.sbatch",
         "slurm_script",
         "run.sh",
+        "python",
+        "python3",
+        "/usr/bin/python3",
+        "/storage/cluster/venvs/e1/bin/python",
+        "/opt/conda/bin/python3.10",
+        "ipython",
+        "/home/user/.local/bin/ipython",
+        "julia",
+        "/opt/julia/bin/julia",
+        "R",
+        "gdb",
+        "cuda-gdb",
+        "node",
+        "matlab",
         "python train.py",
         "/usr/bin/python train_classifier.py --epochs 100",
         "bash submit.sh",

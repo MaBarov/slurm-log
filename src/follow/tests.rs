@@ -246,18 +246,20 @@ fn ended_interactive_monitor_waits_for_enter() {
 }
 
 #[test]
-fn pending_scheduler_lag_promises_automatic_log_attachment() {
+fn pending_frame_explains_reason_and_promises_automatic_attachment() {
     let frame = interactive_frame(
         &Job {
             cluster: "local".into(),
             id: "42".into(),
             name: "train".into(),
             state: "PENDING".into(),
+            reason: "Resources".into(),
             ..Job::default()
         },
         false,
     );
     assert!(frame.contains("WAITING FOR LOG  local:42  train"));
+    assert!(frame.contains("Pending reason: Resources (waiting for requested compute resources)"));
     assert!(frame.contains("will attach automatically"));
     assert!(!frame.contains("INTERACTIVE ALLOCATION"));
 }
