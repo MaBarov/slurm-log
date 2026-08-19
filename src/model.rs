@@ -112,11 +112,7 @@ impl Job {
     pub fn state_display(&self) -> &str {
         if self.pending() {
             let tag = self.pending_tag();
-            if tag.is_empty() {
-                "PENDING"
-            } else {
-                tag
-            }
+            if tag.is_empty() { "PENDING" } else { tag }
         } else {
             self.state.as_str()
         }
