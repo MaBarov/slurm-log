@@ -216,21 +216,47 @@ fn parse_gpus(tres: &str) -> (u64, String) {
     let mut typed_count = 0;
     let mut kinds = Vec::new();
     for item in tres.split(',') {
-        let Some((name, value)) = item.rsplit_once('=') else {
+        let item = item.trim();
+        if item.is_empty() {
             continue;
-        };
-        if name == "gres/gpu" || name == "gpu" {
-            generic_count += value.parse::<u64>().unwrap_or(0);
-        } else if let Some(kind) = name.strip_prefix("gres/gpu:") {
-            typed_count += value.parse::<u64>().unwrap_or(0);
-            kinds.push(kind.to_string());
+        }
+        if let Some((name, value)) = item.rsplit_once('=') {
+            if name == "gres/gpu" || name == "gpu" {
+                generic_count += value.parse::<u64>().unwrap_or(0);
+            } else if let Some(kind) = name.strip_prefix("gres/gpu:") {
+                typed_count += value.parse::<u64>().unwrap_or(0);
+                kinds.push(kind.to_string());
+            } else if let Some(kind) = name.strip_prefix("gpu:") {
+                typed_count += value.parse::<u64>().unwrap_or(0);
+                kinds.push(kind.to_string());
+            }
+        } else {
+            let token = item.strip_prefix("gres/").unwrap_or(item);
+            if let Some(rest) = token.strip_prefix("gpu:") {
+                let parts: Vec<&str> = rest.split(':').collect();
+                match parts.as_slice() {
+                    [count_str] => {
+                        if let Ok(count) = count_str.parse::<u64>() {
+                            generic_count += count;
+                        }
+                    }
+                    [kind, count_str] => {
+                        if let Ok(count) = count_str.parse::<u64>() {
+                            typed_count += count;
+                            if !kind.is_empty() {
+                                kinds.push((*kind).to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            } else if token == "gpu" {
+                generic_count += 1;
+            }
         }
     }
     kinds.sort();
     kinds.dedup();
-    // Slurm commonly emits both gres/gpu=N and gres/gpu:TYPE=N for the same
-    // devices. The typed fields refine the generic field; they are not extra
-    // GPUs and must not be summed with it.
     (
         if typed_count > 0 {
             typed_count

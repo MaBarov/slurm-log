@@ -134,6 +134,26 @@ fn parse_live_control(input: &str, job: Job) -> Option<JobDetails> {
     if gpus == 0 {
         (gpus, gpu_types) = parse_gpus(req_tres);
     }
+    if gpus == 0 {
+        for fallback in [
+            value("TresPerNode"),
+            value("TresPerJob"),
+            value("TresPerTask"),
+            value("AllocGres"),
+            value("Gres"),
+            value("ReqGres"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let (count, types) = parse_gpus(fallback);
+            if count > 0 {
+                gpus = count;
+                gpu_types = types;
+                break;
+            }
+        }
+    }
     let elapsed = value("RunTime").unwrap_or(&job.elapsed).to_string();
     Some(JobDetails {
         cluster: job.cluster,
